@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from core.state_ops import MAX_SPEAKER_SLOTS
-from models.state import AppState, SpeakerProfile
+from models.state import AppState
 
 
 def make_empty_state() -> dict[str, Any]:
@@ -31,12 +31,10 @@ def build_subtitle_rows(state: AppState) -> list[list[str]]:
     ]
 
 
-def raw_label_for_speaker(speaker: SpeakerProfile) -> str:
-    return speaker.display_name if speaker.display_name.startswith("話者") else ""
-
-
-def build_speaker_slot_updates(state: AppState) -> list[dict[str, Any]]:
-    speaker_choices = [(speaker.display_name, speaker.speaker_id) for speaker in state.speakers]
+def build_speaker_slot_updates(
+    state: AppState,
+    selected_speaker_id: str | None,
+) -> list[dict[str, Any]]:
     slots: list[dict[str, Any]] = []
 
     for index in range(MAX_SPEAKER_SLOTS):
@@ -44,42 +42,70 @@ def build_speaker_slot_updates(state: AppState) -> list[dict[str, Any]]:
             slots.append(
                 {
                     "visible": False,
-                    "title": "",
                     "speaker_id": None,
-                    "display_name": "",
-                    "utterances_html": "",
-                    "merge_choices": [],
-                    "swap_choices": [],
+                    "button_label": "",
+                    "variant": "secondary",
                 }
             )
             continue
 
         speaker = state.speakers[index]
-        utterances = [
-            segment
-            for segment in state.subtitle_segments
-            if segment.speaker_id == speaker.speaker_id
-        ]
-        utterance_lines = "".join(
-            f"<li><strong>[{format_seconds(segment.start)}]</strong> {segment.edited_text}</li>"
-            for segment in utterances
-        )
+        selected = speaker.speaker_id == selected_speaker_id
         slots.append(
             {
                 "visible": True,
-                "title": f"{speaker.display_name}（{speaker.utterance_count}件）",
                 "speaker_id": speaker.speaker_id,
-                "display_name": "" if speaker.display_name.startswith("話者") else speaker.display_name,
-                "utterances_html": f"<ul>{utterance_lines}</ul>",
-                "merge_choices": [
-                    choice for choice in speaker_choices if choice[1] != speaker.speaker_id
-                ],
-                "swap_choices": [
-                    choice for choice in speaker_choices if choice[1] != speaker.speaker_id
-                ],
+                "button_label": speaker.display_name,
+                "variant": "primary" if selected else "secondary",
             }
         )
     return slots
+
+
+def build_speaker_detail(state: AppState, selected_speaker_id: str | None) -> dict[str, Any]:
+    if not selected_speaker_id:
+        return {
+            "title": "### 話者を選択してください",
+            "speaker_id": None,
+            "display_name": "",
+            "utterances_html": "<div></div>",
+            "merge_choices": [],
+            "swap_choices": [],
+        }
+
+    speaker = next(
+        (item for item in state.speakers if item.speaker_id == selected_speaker_id),
+        None,
+    )
+    if speaker is None:
+        return {
+            "title": "### 話者を選択してください",
+            "speaker_id": None,
+            "display_name": "",
+            "utterances_html": "<div></div>",
+            "merge_choices": [],
+            "swap_choices": [],
+        }
+
+    utterances = [
+        segment
+        for segment in state.subtitle_segments
+        if segment.speaker_id == selected_speaker_id
+    ]
+    utterance_lines = "".join(
+        f"<li><strong>[{format_seconds(segment.start)}]</strong> {segment.edited_text}</li>"
+        for segment in utterances
+    )
+    speaker_choices = [(item.display_name, item.speaker_id) for item in state.speakers]
+
+    return {
+        "title": f"### {speaker.display_name}（{speaker.utterance_count}件）",
+        "speaker_id": speaker.speaker_id,
+        "display_name": "" if speaker.display_name.startswith("話者") else speaker.display_name,
+        "utterances_html": f"<ul>{utterance_lines}</ul>",
+        "merge_choices": [choice for choice in speaker_choices if choice[1] != speaker.speaker_id],
+        "swap_choices": [choice for choice in speaker_choices if choice[1] != speaker.speaker_id],
+    }
 
 
 def format_status_box(message: str, kind: str = "info") -> str:
