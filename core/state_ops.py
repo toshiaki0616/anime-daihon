@@ -1,183 +1,554 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
+from copy import deepcopy
+from datetime import datetime
+from string import ascii_uppercase
 from typing import Iterable
 
-from models.state import AppState, SpeakerProfile, SubtitleSegment
+from models.state import AppState, Episode, SpeakerProfile, SubtitleSegment, Work
+from services.diarization import DiarizationSegment
+from services.transcription import TranscriptionSegment
 
-MAX_SPEAKER_SLOTS = 4
+MAX_SPEAKER_SLOTS = 8
+FALLBACK_SPEAKER_ID = "speaker_a"
+FALLBACK_LABEL = "話者A"
+
+
+def now_label() -> str:
+    return datetime.now().replace(microsecond=0).isoformat(timespec="seconds")
+
+
+def build_mock_app_state() -> AppState:
+    work_one = Work(
+        work_id="work_001",
+        title="ONE PIECE",
+        character_names=["ルフィ", "ゾロ", "ナミ"],
+        created_at="2026-03-19T18:30:00",
+        updated_at="2026-03-19T20:15:00",
+        episodes=[
+            build_mock_episode("episode_001", "第1話", "作業中", "2026-03-19T20:15:00"),
+            build_empty_episode("episode_002", "第2話", "未整理", "2026-03-18T21:00:00"),
+        ],
+    )
+    work_two = Work(
+        work_id="work_002",
+        title="鬼滅の刃",
+        character_names=["炭治郎", "禰豆子", "善逸"],
+        created_at="2026-03-15T14:00:00",
+        updated_at="2026-03-18T19:20:00",
+        episodes=[
+            build_mock_episode("episode_003", "第1話", "完了", "2026-03-18T19:20:00"),
+        ],
+    )
+    return AppState(
+        works=sorted([work_one, work_two], key=lambda work: work.updated_at, reverse=True),
+        current_page="work_list",
+    )
+
+
+def build_empty_episode(episode_id: str, title: str, status: str, updated_at: str) -> Episode:
+    return Episode(
+        episode_id=episode_id,
+        title=title,
+        status=status,
+        updated_at=updated_at,
+        subtitle_segments=[],
+        speakers=[],
+        merge_map={},
+        speaker_label_map={},
+    )
+
+
+def build_mock_episode(episode_id: str, title: str, status: str, updated_at: str) -> Episode:
+    episode = Episode(
+        episode_id=episode_id,
+        title=title,
+        status=status,
+        updated_at=updated_at,
+        file_path="sample.mp4",
+        wav_path="sample.wav",
+        range_start="00:00:00",
+        range_end="00:02:00",
+        enhance_audio=False,
+        subtitle_segments=[
+            SubtitleSegment(
+                id="seg_001",
+                start=12.0,
+                end=14.2,
+                speaker_id="speaker_a",
+                raw_label="話者A",
+                display_name="話者A",
+                original_text="そんなことできるわけないだろ",
+                edited_text="そんなことできるわけないだろ",
+            ),
+            SubtitleSegment(
+                id="seg_002",
+                start=15.0,
+                end=16.4,
+                speaker_id="speaker_b",
+                raw_label="話者B",
+                display_name="話者B",
+                original_text="……できるさ",
+                edited_text="……できるさ",
+            ),
+            SubtitleSegment(
+                id="seg_003",
+                start=21.0,
+                end=24.0,
+                speaker_id="speaker_c",
+                raw_label="話者C",
+                display_name="話者C",
+                original_text="今はまだ黙って進むしかない",
+                edited_text="今はまだ黙って進むしかない",
+            ),
+            SubtitleSegment(
+                id="seg_004",
+                start=27.0,
+                end=29.0,
+                speaker_id="speaker_a",
+                raw_label="話者A",
+                display_name="話者A",
+                original_text="聞こえたら合図してくれ",
+                edited_text="聞こえたら合図してくれ",
+            ),
+        ],
+        speakers=[],
+        merge_map={},
+        speaker_label_map={
+            "speaker_0": "speaker_a",
+            "speaker_1": "speaker_b",
+            "speaker_2": "speaker_c",
+        },
+    )
+    return sync_episode(episode)
+
+
+def get_selected_work(state: AppState) -> Work | None:
+    return next((work for work in state.works if work.work_id == state.selected_work_id), None)
+
+
+def get_selected_episode(state: AppState) -> Episode | None:
+    work = get_selected_work(state)
+    if work is None:
+        return None
+    return next((episode for episode in work.episodes if episode.episode_id == state.selected_episode_id), None)
+
+
+def _speaker_label_for_index(index: int) -> str:
+    if 0 <= index < len(ascii_uppercase):
+        return f"話者{ascii_uppercase[index]}"
+    return f"話者{index + 1}"
+
+
+def _speaker_id_for_index(index: int) -> str:
+    if 0 <= index < len(ascii_uppercase):
+        return f"speaker_{ascii_uppercase[index].lower()}"
+    return f"speaker_{index + 1:02d}"
+
+
+def _label_for_speaker_id(speaker_id: str) -> str:
+    if speaker_id.startswith("speaker_") and len(speaker_id) == 9 and speaker_id[-1].isalpha():
+        suffix = speaker_id[-1].upper()
+        return f"話者{suffix}"
+    if speaker_id.startswith("speaker_"):
+        tail = speaker_id.split("_", 1)[1]
+        if tail.isdigit():
+            return f"話者{int(tail)}"
+    return FALLBACK_LABEL
+
+
+def _overlap_duration(left_start: float, left_end: float, right_start: float, right_end: float) -> float:
+    return max(0.0, min(left_end, right_end) - max(left_start, right_start))
+
+
+def _assign_speaker_mapping(
+    transcription_segments: list[TranscriptionSegment],
+    diarization_segments: list[DiarizationSegment],
+) -> tuple[list[dict[str, str]], dict[str, str]]:
+    assignments: list[dict[str, str]] = []
+    speaker_first_seen: dict[str, float] = {}
+
+    for item in transcription_segments:
+        overlap_by_speaker: dict[str, float] = {}
+        earliest_overlap: dict[str, float] = {}
+        for diarization in diarization_segments:
+            overlap = _overlap_duration(item.start, item.end, diarization.start, diarization.end)
+            if overlap <= 0:
+                continue
+            overlap_by_speaker[diarization.speaker] = overlap_by_speaker.get(diarization.speaker, 0.0) + overlap
+            earliest_overlap[diarization.speaker] = min(
+                earliest_overlap.get(diarization.speaker, float("inf")),
+                max(item.start, diarization.start),
+            )
+
+        if overlap_by_speaker:
+            dominant_raw = min(
+                overlap_by_speaker,
+                key=lambda speaker: (
+                    -overlap_by_speaker[speaker],
+                    earliest_overlap.get(speaker, float("inf")),
+                    speaker,
+                ),
+            )
+            speaker_first_seen.setdefault(dominant_raw, item.start)
+            assignments.append({"raw_speaker": dominant_raw})
+        else:
+            assignments.append({"raw_speaker": "__fallback__"})
+
+    ordered_raw_speakers = sorted(speaker_first_seen, key=lambda speaker: (speaker_first_seen[speaker], speaker))
+    speaker_label_map = {
+        raw_speaker: _speaker_id_for_index(index)
+        for index, raw_speaker in enumerate(ordered_raw_speakers)
+    }
+    speaker_label_map["__fallback__"] = FALLBACK_SPEAKER_ID
+
+    for assignment in assignments:
+        normalized_id = speaker_label_map.get(assignment["raw_speaker"], FALLBACK_SPEAKER_ID)
+        normalized_label = _label_for_speaker_id(normalized_id)
+        assignment["speaker_id"] = normalized_id
+        assignment["raw_label"] = normalized_label
+        assignment["display_name"] = normalized_label
+
+    normalized_map = {
+        raw_speaker: speaker_id
+        for raw_speaker, speaker_id in speaker_label_map.items()
+        if raw_speaker != "__fallback__"
+    }
+    return assignments, normalized_map
+
+
+def _preserve_edited_text(
+    previous_segments: list[SubtitleSegment],
+    index: int,
+    original_text: str,
+    start: float,
+    end: float,
+) -> str:
+    if index < len(previous_segments):
+        previous = previous_segments[index]
+        same_text = previous.original_text.strip() == original_text.strip()
+        close_range = abs(previous.start - start) < 0.75 and abs(previous.end - end) < 0.75
+        if same_text or close_range:
+            return previous.edited_text
+
+    for previous in previous_segments:
+        if previous.original_text.strip() == original_text.strip():
+            return previous.edited_text
+    return original_text
 
 
 def _rebuild_speakers(
     segments: Iterable[SubtitleSegment],
-    existing_names: dict[str, str],
+    existing_profiles: dict[str, SpeakerProfile],
 ) -> list[SpeakerProfile]:
-    speakers_by_id: dict[str, list[SubtitleSegment]] = {}
+    grouped: dict[str, list[SubtitleSegment]] = {}
     for segment in segments:
-        speakers_by_id.setdefault(segment.speaker_id, []).append(segment)
+        grouped.setdefault(segment.speaker_id, []).append(segment)
 
+    speaker_ids = set(grouped.keys()) | {speaker_id for speaker_id, profile in existing_profiles.items() if profile.utterance_count == 0}
     speakers: list[SpeakerProfile] = []
-    for speaker_id, speaker_segments in speakers_by_id.items():
-        raw_label = speaker_segments[0].raw_speaker_label
+    for speaker_id in speaker_ids:
+        items = grouped.get(speaker_id, [])
+        existing = existing_profiles.get(speaker_id)
+        raw_label = items[0].raw_label if items else (existing.raw_label if existing else _label_for_speaker_id(speaker_id))
+        display_name = existing.display_name if existing else raw_label
         speakers.append(
             SpeakerProfile(
                 speaker_id=speaker_id,
-                display_name=existing_names.get(speaker_id, raw_label),
-                utterance_count=len(speaker_segments),
-                sample_texts=[segment.edited_text for segment in speaker_segments[:3]],
+                raw_label=raw_label,
+                display_name=display_name,
+                utterance_count=len(items),
+                sample_texts=[item.edited_text for item in items[:3]],
             )
         )
-
-    speakers.sort(key=lambda speaker: speaker.speaker_id)
+    speakers.sort(key=lambda item: item.raw_label)
     return speakers
 
 
-def build_mock_state(
-    file_path: str = "",
-    range_start: str = "",
-    range_end: str = "",
-    enhance_audio: bool = False,
-) -> AppState:
-    speakers = [
-        SpeakerProfile("speaker_a", "話者A"),
-        SpeakerProfile("speaker_b", "話者B"),
-        SpeakerProfile("speaker_c", "話者C"),
-    ]
-    segments = [
-        SubtitleSegment(
-            id="seg_001",
-            start=12.0,
-            end=14.2,
-            speaker_id="speaker_a",
-            raw_speaker_label="話者A",
-            display_speaker_name="話者A",
-            original_text="そんなことできるわけないだろ",
-            edited_text="そんなことできるわけないだろ",
-        ),
-        SubtitleSegment(
-            id="seg_002",
-            start=15.0,
-            end=16.4,
-            speaker_id="speaker_b",
-            raw_speaker_label="話者B",
-            display_speaker_name="話者B",
-            original_text="……できるさ",
-            edited_text="……できるさ",
-        ),
-        SubtitleSegment(
-            id="seg_003",
-            start=21.0,
-            end=24.0,
-            speaker_id="speaker_c",
-            raw_speaker_label="話者C",
-            display_speaker_name="話者C",
-            original_text="今はまだ黙って進むしかない",
-            edited_text="今はまだ黙って進むしかない",
-        ),
-        SubtitleSegment(
-            id="seg_004",
-            start=27.0,
-            end=29.0,
-            speaker_id="speaker_a",
-            raw_speaker_label="話者A",
-            display_speaker_name="話者A",
-            original_text="聞こえたら合図してくれ",
-            edited_text="聞こえたら合図してくれ",
-        ),
-        SubtitleSegment(
-            id="seg_005",
-            start=31.0,
-            end=33.0,
-            speaker_id="speaker_b",
-            raw_speaker_label="話者B",
-            display_speaker_name="話者B",
-            original_text="わかった、ここで待つ",
-            edited_text="わかった、ここで待つ",
-        ),
-    ]
+def _touch_work_for_episode(state: AppState, episode: Episode) -> None:
+    work = get_selected_work(state)
+    if work is not None:
+        work.updated_at = episode.updated_at
 
-    return sync_state(
-        AppState(
-            file_path=file_path,
-            range_start=range_start,
-            range_end=range_end,
-            enhance_audio=enhance_audio,
-            subtitle_segments=segments,
-            speakers=speakers,
-            merge_map={},
+
+def sync_episode(episode: Episode) -> Episode:
+    existing_profiles = {speaker.speaker_id: speaker for speaker in episode.speakers}
+    episode.speakers = _rebuild_speakers(episode.subtitle_segments, existing_profiles)
+    display_names = {speaker.speaker_id: speaker.display_name for speaker in episode.speakers}
+    raw_labels = {speaker.speaker_id: speaker.raw_label for speaker in episode.speakers}
+    for segment in episode.subtitle_segments:
+        segment.raw_label = raw_labels.get(segment.speaker_id, _label_for_speaker_id(segment.speaker_id))
+        segment.display_name = display_names.get(segment.speaker_id, segment.raw_label)
+    if episode.subtitle_segments and episode.status == "未整理":
+        episode.status = "作業中"
+    episode.updated_at = now_label()
+    return episode
+
+
+def _next_speaker_identity(episode: Episode) -> tuple[str, str]:
+    used_ids = {speaker.speaker_id for speaker in episode.speakers}
+    for index in range(len(ascii_uppercase)):
+        speaker_id = _speaker_id_for_index(index)
+        if speaker_id not in used_ids:
+            return speaker_id, _speaker_label_for_index(index)
+    speaker_number = len(episode.speakers) + 1
+    return f"speaker_{speaker_number:02d}", f"話者{speaker_number}"
+
+
+def _resolve_manual_speaker_id(episode: Episode, label_text: str) -> str | None:
+    normalized = label_text.strip()
+    if not normalized:
+        return None
+
+    for speaker in episode.speakers:
+        if normalized in {speaker.raw_label, speaker.display_name}:
+            return speaker.speaker_id
+
+    if normalized.startswith("話者") and len(normalized) == 3 and normalized[-1].upper() in ascii_uppercase:
+        speaker_id = f"speaker_{normalized[-1].lower()}"
+        for speaker in episode.speakers:
+            if speaker.speaker_id == speaker_id:
+                return speaker_id
+        episode.speakers.append(
+            SpeakerProfile(
+                speaker_id=speaker_id,
+                raw_label=normalized,
+                display_name=normalized,
+                utterance_count=0,
+                sample_texts=[],
+            )
+        )
+        return speaker_id
+
+    speaker_id, raw_label = _next_speaker_identity(episode)
+    episode.speakers.append(
+        SpeakerProfile(
+            speaker_id=speaker_id,
+            raw_label=raw_label,
+            display_name=normalized,
+            utterance_count=0,
+            sample_texts=[],
         )
     )
+    return speaker_id
 
 
-def sync_state(state: AppState) -> AppState:
-    existing_names = {speaker.speaker_id: speaker.display_name for speaker in state.speakers}
-    state.speakers = _rebuild_speakers(state.subtitle_segments, existing_names)
+def create_work(state: AppState) -> AppState:
+    next_state = deepcopy(state)
+    work_number = len(next_state.works) + 1
+    timestamp = now_label()
+    work = Work(
+        work_id=f"work_{work_number:03d}",
+        title=f"新しい作品{work_number}",
+        character_names=[],
+        created_at=timestamp,
+        updated_at=timestamp,
+        episodes=[],
+    )
+    next_state.works.insert(0, work)
+    next_state.selected_work_id = work.work_id
+    next_state.current_page = "work_detail"
+    return next_state
 
-    display_names = {speaker.speaker_id: speaker.display_name for speaker in state.speakers}
-    for segment in state.subtitle_segments:
-        segment.display_speaker_name = display_names.get(segment.speaker_id, segment.raw_speaker_label)
-    return state
+
+def update_work_title(state: AppState, title: str) -> AppState:
+    next_state = deepcopy(state)
+    work = get_selected_work(next_state)
+    if work is None:
+        return next_state
+    trimmed = title.strip()
+    if trimmed:
+        work.title = trimmed
+        work.updated_at = now_label()
+    return next_state
+
+
+def create_episode(state: AppState) -> AppState:
+    next_state = deepcopy(state)
+    work = get_selected_work(next_state)
+    if work is None:
+        return next_state
+    episode_number = len(work.episodes) + 1
+    episode = build_empty_episode(
+        episode_id=f"{work.work_id}_ep_{episode_number:03d}",
+        title=f"第{episode_number}話",
+        status="未整理",
+        updated_at=now_label(),
+    )
+    work.episodes.insert(0, episode)
+    work.updated_at = episode.updated_at
+    next_state.selected_episode_id = episode.episode_id
+    next_state.current_page = "episode_editor"
+    return next_state
+
+
+def add_speaker_profile(state: AppState) -> AppState:
+    next_state = deepcopy(state)
+    episode = get_selected_episode(next_state)
+    if episode is None:
+        return next_state
+    speaker_id, raw_label = _next_speaker_identity(episode)
+    episode.speakers.append(
+        SpeakerProfile(
+            speaker_id=speaker_id,
+            raw_label=raw_label,
+            display_name=raw_label,
+            utterance_count=0,
+            sample_texts=[],
+        )
+    )
+    next_state.selected_speaker_id = speaker_id
+    sync_episode(episode)
+    _touch_work_for_episode(next_state, episode)
+    return next_state
+
+
+def apply_transcription_segments(
+    state: AppState,
+    file_path: str,
+    wav_path: str,
+    range_start: str,
+    range_end: str,
+    enhance_audio: bool,
+    transcription_segments: list[TranscriptionSegment],
+    diarization_segments: list[DiarizationSegment] | None = None,
+) -> AppState:
+    next_state = deepcopy(state)
+    episode = get_selected_episode(next_state)
+    if episode is None:
+        return next_state
+
+    previous_segments = deepcopy(episode.subtitle_segments)
+    diarization_segments = diarization_segments or []
+    assignments, speaker_label_map = _assign_speaker_mapping(transcription_segments, diarization_segments)
+
+    subtitle_segments: list[SubtitleSegment] = []
+    for index, item in enumerate(transcription_segments):
+        text = item.text.strip()
+        if not text:
+            continue
+        assignment = assignments[index] if index < len(assignments) else {
+            "speaker_id": FALLBACK_SPEAKER_ID,
+            "raw_label": FALLBACK_LABEL,
+            "display_name": FALLBACK_LABEL,
+        }
+        subtitle_segments.append(
+            SubtitleSegment(
+                id=f"seg_{len(subtitle_segments) + 1:03d}",
+                start=item.start,
+                end=item.end,
+                speaker_id=assignment["speaker_id"],
+                raw_label=assignment["raw_label"],
+                display_name=assignment["display_name"],
+                original_text=text,
+                edited_text=_preserve_edited_text(previous_segments, index, text, item.start, item.end),
+            )
+        )
+
+    episode.file_path = file_path
+    episode.wav_path = wav_path
+    episode.range_start = range_start
+    episode.range_end = range_end
+    episode.enhance_audio = enhance_audio
+    episode.subtitle_segments = subtitle_segments
+    episode.speaker_label_map = speaker_label_map if subtitle_segments else {}
+    episode.merge_map = {}
+    episode.status = "作業中" if subtitle_segments else episode.status
+    sync_episode(episode)
+    _touch_work_for_episode(next_state, episode)
+    return next_state
+
+
+def update_character_names(state: AppState, raw_text: str) -> AppState:
+    next_state = deepcopy(state)
+    work = get_selected_work(next_state)
+    if work is None:
+        return next_state
+    work.character_names = [
+        item.strip()
+        for item in raw_text.replace("、", ",").replace("\n", ",").split(",")
+        if item.strip()
+    ]
+    work.updated_at = now_label()
+    return next_state
+
+
+def apply_subtitle_edits(state: AppState, rows: list[list[str]]) -> AppState:
+    next_state = deepcopy(state)
+    episode = get_selected_episode(next_state)
+    if episode is None:
+        return next_state
+    row_map = {row[0]: row for row in rows if len(row) >= 4}
+    for segment in episode.subtitle_segments:
+        row = row_map.get(segment.id)
+        if not row:
+            continue
+        manual_speaker_id = _resolve_manual_speaker_id(episode, str(row[2]))
+        if manual_speaker_id:
+            segment.speaker_id = manual_speaker_id
+        segment.edited_text = str(row[3])
+    sync_episode(episode)
+    _touch_work_for_episode(next_state, episode)
+    return next_state
 
 
 def rename_speaker(state: AppState, speaker_id: str, new_name: str) -> AppState:
-    fallback_label = next(
-        (segment.raw_speaker_label for segment in state.subtitle_segments if segment.speaker_id == speaker_id),
-        "",
-    )
-    next_name = new_name.strip() or fallback_label
-
-    for speaker in state.speakers:
-        if speaker.speaker_id == speaker_id:
-            speaker.display_name = next_name
-            break
-    return sync_state(state)
+    next_state = deepcopy(state)
+    episode = get_selected_episode(next_state)
+    if episode is None:
+        return next_state
+    target = next((speaker for speaker in episode.speakers if speaker.speaker_id == speaker_id), None)
+    if target is None:
+        return next_state
+    target.display_name = new_name.strip() or target.raw_label
+    sync_episode(episode)
+    _touch_work_for_episode(next_state, episode)
+    return next_state
 
 
 def merge_speakers(state: AppState, source_speaker_id: str, target_speaker_id: str) -> AppState:
-    if source_speaker_id == target_speaker_id:
-        return state
+    next_state = deepcopy(state)
+    episode = get_selected_episode(next_state)
+    if episode is None or source_speaker_id == target_speaker_id:
+        return next_state
 
-    for segment in state.subtitle_segments:
+    source_exists = any(speaker.speaker_id == source_speaker_id for speaker in episode.speakers)
+    target_exists = any(speaker.speaker_id == target_speaker_id for speaker in episode.speakers)
+    if not source_exists or not target_exists:
+        return next_state
+
+    for segment in episode.subtitle_segments:
         if segment.speaker_id == source_speaker_id:
             segment.speaker_id = target_speaker_id
-            state.merge_map[source_speaker_id] = target_speaker_id
-    return sync_state(state)
+    episode.merge_map[source_speaker_id] = target_speaker_id
+    episode.speakers = [speaker for speaker in episode.speakers if speaker.speaker_id != source_speaker_id]
+    if next_state.selected_speaker_id == source_speaker_id:
+        next_state.selected_speaker_id = target_speaker_id
+    sync_episode(episode)
+    _touch_work_for_episode(next_state, episode)
+    return next_state
 
 
 def swap_speakers(state: AppState, left_speaker_id: str, right_speaker_id: str) -> AppState:
-    if left_speaker_id == right_speaker_id:
-        return state
+    next_state = deepcopy(state)
+    episode = get_selected_episode(next_state)
+    if episode is None or left_speaker_id == right_speaker_id:
+        return next_state
 
-    left_name = ""
-    right_name = ""
-    for speaker in state.speakers:
-        if speaker.speaker_id == left_speaker_id:
-            left_name = speaker.display_name
-        if speaker.speaker_id == right_speaker_id:
-            right_name = speaker.display_name
+    left_exists = any(speaker.speaker_id == left_speaker_id for speaker in episode.speakers)
+    right_exists = any(speaker.speaker_id == right_speaker_id for speaker in episode.speakers)
+    if not left_exists or not right_exists:
+        return next_state
 
-    for segment in state.subtitle_segments:
+    for segment in episode.subtitle_segments:
         if segment.speaker_id == left_speaker_id:
             segment.speaker_id = "__swap_tmp__"
         elif segment.speaker_id == right_speaker_id:
             segment.speaker_id = left_speaker_id
-
-    for segment in state.subtitle_segments:
+    for segment in episode.subtitle_segments:
         if segment.speaker_id == "__swap_tmp__":
             segment.speaker_id = right_speaker_id
 
-    synced_state = sync_state(state)
-    for speaker in synced_state.speakers:
-        if speaker.speaker_id == left_speaker_id:
-            speaker.display_name = right_name or speaker.display_name
-        elif speaker.speaker_id == right_speaker_id:
-            speaker.display_name = left_name or speaker.display_name
-    return sync_state(synced_state)
-
-
-def apply_subtitle_edits(state: AppState, rows: list[list[str]]) -> AppState:
-    row_map = {row[0]: row for row in rows if len(row) >= 4}
-    for segment in state.subtitle_segments:
-        row = row_map.get(segment.id)
-        if row:
-            segment.edited_text = row[3]
-    return sync_state(state)
+    sync_episode(episode)
+    _touch_work_for_episode(next_state, episode)
+    return next_state

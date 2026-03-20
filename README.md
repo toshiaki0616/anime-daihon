@@ -1,103 +1,56 @@
-# Windows Local Subtitle Assistant - Phase 1
+﻿# Subtitle Library UI - Step 5
 
-Windows ローカルで動かす字幕補助ツールの Phase 1 実装です。  
-この段階では、Gradio の UI 骨組みと構造化ステート管理のみを実装しています。
+Python + Gradio で作る字幕管理アプリの Step 5 実装です。  
+この段階では文字起こしと話者分離の結果に対して、rename / merge / swap / 字幕編集の補正ワークフローを安定化しています。
 
 ## 実装範囲
 
-- 2ページ UI
-  - 字幕作成ページ
-  - 話者一覧ページ
-- モック字幕データの表示
-- 字幕行の編集
-- 話者名の変更
-- 話者の統合
-- 話者の入れ替え
-- UI の即時更新
-- 構造化ステートからの再描画
-
-Phase 2 で実装済み:
-
-- `mp4` から `wav` への音声抽出
-- `mp3` から `wav` への変換
-- `wav` の直接利用
-- 任意範囲の切り出し
-- 入力検証とエラー処理
+- 作品一覧ページ
+- 作品詳細ページ
+- 話数編集ページ
+- 話者一覧ページ
+- 前処理済み wav からの文字起こし
+- ローカル speaker diarization
+- 字幕セグメントへの優勢話者割り当て
+- 話者A / 話者B / 話者C の正規化表示
+- rename / merge / swap の安定化
+- edited_text の保持
+- 操作後の即時 UI 再描画
 
 未実装:
 
-- Whisper 互換の文字起こし
-- 話者分離
-- 音声強調処理
+- 自動キャラ名付与
+- JSON 保存
 
-## ディレクトリ構成
+## 依存関係
 
-```text
-project/
-  app.py
-  README.md
-  requirements.txt
-  ui/
-    __init__.py
-    renderers.py
-  core/
-    __init__.py
-    state_ops.py
-  models/
-    __init__.py
-    state.py
-  services/
-    __init__.py
-    mock_pipeline.py
-  data/
-```
-
-## セットアップ
-
-1. Python 3.10 以上を用意します
-2. 仮想環境を作成します
-3. 依存関係をインストールします
+Step 5 ではローカル Whisper 互換モデルとして `openai-whisper`、ローカル話者分離として `pyannote.audio` を使います。
 
 ```powershell
-cd project
-python -m venv .venv
+cd C:\work\codex\project
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-`mp4` / `mp3` の変換と範囲切り出しには、別途 `ffmpeg` がローカル環境で利用できる必要があります。
-
-## 起動
+`pyannote.audio` はローカルで利用できるモデルが必要です。必要に応じて `DIARIZATION_MODEL` 環境変数でローカルパスまたは利用可能なモデル名を指定してください。
 
 ```powershell
-cd project
+$env:DIARIZATION_MODEL = "pyannote/speaker-diarization-3.1"
+```
+
+## 起動方法
+
+```powershell
+cd C:\work\codex\project
+.venv\Scripts\Activate.ps1
 python app.py
 ```
 
-起動後はブラウザで Gradio UI を開き、`mp4` / `wav` / `mp3` を選ぶと、まず前処理を実行します。
+## Step 5 のポイント
 
-- `mp4` は音声を抽出して `wav` に変換します
-- `mp3` は `wav` に変換します
-- `wav` はそのまま使用します
-- 開始時刻と終了時刻を指定すると、その範囲だけを切り出します
-
-前処理の完了後、Phase 2 時点ではモック字幕を表示します。
-
-## 状態管理の考え方
-
-字幕編集は文字列置換ではなく、以下の構造化データを保持します。
-
-- `SubtitleSegment`
-  - セグメント単位の時刻、話者、元テキスト、編集テキスト
-- `SpeakerProfile`
-  - 話者 ID、表示名、件数、サンプル発話
-- `AppState`
-  - 入力条件、字幕一覧、話者一覧、統合マップ
-
-UI は毎回この状態から再描画されるため、Phase 2 以降で音声処理を追加しても保守しやすい構成です。
-
-## 次フェーズ拡張メモ
-
-- `services/` に文字起こしと diarization のローカル実装を追加
-- `core/state_ops.py` に統合ロジックを追加し、実結果と UI を接続
-- `data/` に一時 wav や処理キャッシュを保持
+- rename は `speaker_id` を変えず、`display_name` だけ更新
+- merge は元のセグメント本文を壊さず、統合先へ再割り当てして即再描画
+- swap は本文や display 名を壊さず、話者割り当てだけを入れ替え
+- `edited_text` は rename / merge / swap / ページ移動の後も保持
+- 字幕テーブルの `話者` 列を手で直して保存すると、その行の話者割り当ても state に反映
+- UI は常に canonical state から再描画されるため、表示だけを書き換える実装にはしていません

@@ -1,8 +1,8 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Any
 
-from core.state_ops import MAX_SPEAKER_SLOTS
+from core.state_ops import MAX_SPEAKER_SLOTS, get_selected_episode, get_selected_work
 from models.state import AppState
 
 
@@ -12,97 +12,104 @@ def make_empty_state() -> dict[str, Any]:
 
 def format_seconds(seconds: float) -> str:
     total_seconds = int(seconds)
-    minutes, sec = divmod(total_seconds, 60)
-    hours, minutes = divmod(minutes, 60)
-    if hours > 0:
-        return f"{hours:02d}:{minutes:02d}:{sec:02d}"
-    return f"{minutes:02d}:{sec:02d}"
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, sec = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{sec:02d}"
+
+
+def format_timestamp(value: str) -> str:
+    return value.replace("T", " ") if value else "-"
+
+
+def build_work_rows(state: AppState) -> list[list[str]]:
+    return [
+        [work.title, str(len(work.episodes)), format_timestamp(work.updated_at)]
+        for work in state.works
+    ]
+
+
+def build_episode_rows(state: AppState) -> list[list[str]]:
+    work = get_selected_work(state)
+    if work is None:
+        return []
+    return [
+        [episode.title, episode.status, format_timestamp(episode.updated_at)]
+        for episode in sorted(work.episodes, key=lambda item: item.updated_at, reverse=True)
+    ]
 
 
 def build_subtitle_rows(state: AppState) -> list[list[str]]:
+    episode = get_selected_episode(state)
+    if episode is None:
+        return []
     return [
-        [
-            segment.id,
-            f"[{format_seconds(segment.start)}]",
-            segment.display_speaker_name,
-            segment.edited_text,
-        ]
-        for segment in state.subtitle_segments
+        [segment.id, f"[{format_seconds(segment.start)}]", segment.display_name, segment.edited_text]
+        for segment in episode.subtitle_segments
     ]
 
 
-def build_speaker_slot_updates(
-    state: AppState,
-    selected_speaker_id: str | None,
-) -> list[dict[str, Any]]:
-    slots: list[dict[str, Any]] = []
+def build_speaker_list_payloads(state: AppState) -> list[dict[str, Any]]:
+    episode = get_selected_episode(state)
+    empty_payload = {
+        "visible": False,
+        "label": "",
+        "speaker_id": None,
+        "variant": "secondary",
+    }
+    if episode is None:
+        return [empty_payload.copy() for _ in range(MAX_SPEAKER_SLOTS)]
 
+    payloads: list[dict[str, Any]] = []
     for index in range(MAX_SPEAKER_SLOTS):
-        if index >= len(state.speakers):
-            slots.append(
-                {
-                    "visible": False,
-                    "speaker_id": None,
-                    "button_label": "",
-                    "variant": "secondary",
-                }
-            )
+        if index >= len(episode.speakers):
+            payloads.append(empty_payload.copy())
             continue
-
-        speaker = state.speakers[index]
-        selected = speaker.speaker_id == selected_speaker_id
-        slots.append(
+        speaker = episode.speakers[index]
+        name_label = speaker.display_name or speaker.raw_label
+        count_label = f"{name_label} ({speaker.utterance_count}件)"
+        payloads.append(
             {
                 "visible": True,
+                "label": count_label,
                 "speaker_id": speaker.speaker_id,
-                "button_label": speaker.display_name,
-                "variant": "primary" if selected else "secondary",
+                "variant": "primary" if speaker.speaker_id == state.selected_speaker_id else "secondary",
             }
         )
-    return slots
+    return payloads
 
 
-def build_speaker_detail(state: AppState, selected_speaker_id: str | None) -> dict[str, Any]:
-    if not selected_speaker_id:
-        return {
-            "title": "### 話者を選択してください",
-            "speaker_id": None,
-            "display_name": "",
-            "utterances_html": "<div></div>",
-            "merge_choices": [],
-            "swap_choices": [],
-        }
+def build_speaker_detail_payload(state: AppState) -> dict[str, Any]:
+    episode = get_selected_episode(state)
+    empty_payload = {
+        "title": "### 話者を選択してください",
+        "raw_label": "",
+        "speaker_id": None,
+        "display_name": "",
+        "utterances_html": "<div class='speaker-empty'>左の話者を選ぶと、ここにセリフ一覧と編集内容が表示されます。</div>",
+        "merge_choices": [],
+        "swap_choices": [],
+    }
+    if episode is None or not state.selected_speaker_id:
+        return empty_payload
 
-    speaker = next(
-        (item for item in state.speakers if item.speaker_id == selected_speaker_id),
-        None,
-    )
+    speaker = next((item for item in episode.speakers if item.speaker_id == state.selected_speaker_id), None)
     if speaker is None:
-        return {
-            "title": "### 話者を選択してください",
-            "speaker_id": None,
-            "display_name": "",
-            "utterances_html": "<div></div>",
-            "merge_choices": [],
-            "swap_choices": [],
-        }
+        return empty_payload
 
-    utterances = [
-        segment
-        for segment in state.subtitle_segments
-        if segment.speaker_id == selected_speaker_id
+    lines = [
+        f"<li><span class='speaker-time'>[{format_seconds(segment.start)}]</span><span>{segment.edited_text}</span></li>"
+        for segment in episode.subtitle_segments
+        if segment.speaker_id == speaker.speaker_id
     ]
-    utterance_lines = "".join(
-        f"<li><strong>[{format_seconds(segment.start)}]</strong> {segment.edited_text}</li>"
-        for segment in utterances
-    )
-    speaker_choices = [(item.display_name, item.speaker_id) for item in state.speakers]
-
+    sample_lines = "".join(lines) if lines else "<li class='speaker-empty'>まだこの話者にセリフはありません。</li>"
+    speaker_choices = [(item.display_name or item.raw_label, item.speaker_id) for item in episode.speakers]
+    visible_name = speaker.display_name if speaker.display_name != speaker.raw_label else ""
     return {
-        "title": f"### {speaker.display_name}（{speaker.utterance_count}件）",
+        "title": f"### {speaker.raw_label}（{speaker.utterance_count}件）",
+        "raw_label": speaker.raw_label,
         "speaker_id": speaker.speaker_id,
-        "display_name": "" if speaker.display_name.startswith("話者") else speaker.display_name,
-        "utterances_html": f"<ul>{utterance_lines}</ul>",
+        "display_name": visible_name,
+        "utterances_html": f"<div class='speaker-sample-list'><div class='speaker-sample-caption'>セリフ一覧</div><ul>{sample_lines}</ul></div>",
         "merge_choices": [choice for choice in speaker_choices if choice[1] != speaker.speaker_id],
         "swap_choices": [choice for choice in speaker_choices if choice[1] != speaker.speaker_id],
     }
@@ -110,11 +117,16 @@ def build_speaker_detail(state: AppState, selected_speaker_id: str | None) -> di
 
 def format_status_box(message: str, kind: str = "info") -> str:
     colors = {
-        "info": "#0f172a",
-        "success": "#166534",
-        "error": "#b91c1c",
+        "info": "#dbeafe",
+        "success": "#bbf7d0",
+        "error": "#fecaca",
+    }
+    border_colors = {
+        "info": "#1d4ed8",
+        "success": "#15803d",
+        "error": "#dc2626",
     }
     return (
-        "<div style='padding: 12px; border-radius: 10px; background: #f8fafc; "
-        f"border: 1px solid #cbd5e1; color: {colors.get(kind, colors['info'])};'>{message}</div>"
+        "<div style='padding: 12px 14px; border-radius: 12px; background: #111827; "
+        f"border: 1px solid {border_colors.get(kind, border_colors['info'])}; color: {colors.get(kind, colors['info'])};'>{message}</div>"
     )
