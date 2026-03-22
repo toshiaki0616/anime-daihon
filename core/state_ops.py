@@ -373,6 +373,18 @@ def _resolve_manual_speaker_id(episode: Episode, label_text: str) -> str | None:
     if not normalized:
         return None
 
+    # Subtitle table shows confidence prefixes for display only.
+    # Strip them before resolving speaker identities so inline edits
+    # do not create "UNKNOWN | ..." pseudo speakers on every refresh.
+    while " | " in normalized:
+        prefix, remainder = normalized.split(" | ", 1)
+        if prefix.strip() not in {"UNKNOWN", "MEDIUM"}:
+            break
+        normalized = remainder.strip()
+
+    if not normalized:
+        return None
+
     for speaker in episode.speakers:
         if normalized in {speaker.raw_label, speaker.display_name}:
             return speaker.speaker_id

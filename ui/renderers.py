@@ -11,10 +11,20 @@ def make_empty_state() -> dict[str, Any]:
 
 
 def format_seconds(seconds: float) -> str:
-    total_seconds = int(seconds)
-    hours, remainder = divmod(total_seconds, 3600)
+    whole_seconds = int(seconds)
+    hours, remainder = divmod(whole_seconds, 3600)
     minutes, sec = divmod(remainder, 60)
-    return f"{hours:02d}:{minutes:02d}:{sec:02d}"
+    centiseconds = int(round((seconds - whole_seconds) * 100))
+    if centiseconds >= 100:
+        sec += 1
+        centiseconds = 0
+    if sec >= 60:
+        minutes += 1
+        sec = 0
+    if minutes >= 60:
+        hours += 1
+        minutes = 0
+    return f"{hours:02d}:{minutes:02d}:{sec:02d}.{centiseconds:02d}"
 
 
 def format_timestamp(value: str) -> str:
