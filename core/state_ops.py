@@ -7,6 +7,7 @@ from typing import Callable, Iterable
 
 from models.state import AppState, Episode, SpeakerProfile, SubtitleSegment, Work
 from services.diarization import DiarizationSegment
+from services.speaker_id import VoiceprintAssignment
 from services.transcription import TranscriptionSegment
 
 MAX_SPEAKER_SLOTS = 8
@@ -323,6 +324,17 @@ def _build_speaker_diagnostics(
         if len(assigned_counts) == 1 and diarization_segments:
             lines.append("複数話者の可能性はありますが、割り当ては1人に寄っています。必要なら手動で話者を移動してください。")
 
+    matched_voiceprints = [
+        segment for segment in subtitle_segments
+        if segment.voiceprint_character_name and segment.voiceprint_confidence > 0
+    ]
+    if matched_voiceprints:
+        lines.append(f"声紋一致: {len(matched_voiceprints)}件")
+        for segment in matched_voiceprints[:5]:
+            lines.append(
+                f"- [{segment.start:.1f}s] {segment.voiceprint_character_name} ({segment.voiceprint_confidence:.2f})"
+            )
+
     return "`n".join(lines)
 
 
@@ -474,6 +486,7 @@ def apply_transcription_segments(
     transcription_segments: list[TranscriptionSegment],
     diarization_segments: list[DiarizationSegment] | None = None,
     text_postprocessor: Callable[[str], str] | None = None,
+    voiceprint_assignments: list[VoiceprintAssignment | None] | None = None,
 ) -> AppState:
     next_state = deepcopy(state)
     episode = get_selected_episode(next_state)
@@ -482,6 +495,7 @@ def apply_transcription_segments(
 
     previous_segments = deepcopy(episode.subtitle_segments)
     diarization_segments = diarization_segments or []
+    voiceprint_assignments = voiceprint_assignments or []
     assignments, speaker_label_map = _assign_speaker_mapping(transcription_segments, diarization_segments)
 
     subtitle_segments: list[SubtitleSegment] = []
@@ -495,14 +509,28 @@ def apply_transcription_segments(
             "raw_label": FALLBACK_LABEL,
             "display_name": FALLBACK_LABEL,
         }
+        voiceprint_assignment = voiceprint_assignments[index] if index < len(voiceprint_assignments) else None
+        speaker_id = assignment["speaker_id"]
+        raw_label = assignment["raw_label"]
+        display_name = assignment["display_name"]
+        voiceprint_profile_id = ""
+        voiceprint_character_name = ""
+        voiceprint_confidence = 0.0
+        if voiceprint_assignment is not None:
+            speaker_id = f"voiceprint_{voiceprint_assignment.profile_id}"
+            raw_label = voiceprint_assignment.character_name
+            display_name = voiceprint_assignment.character_name
+            voiceprint_profile_id = voiceprint_assignment.profile_id
+            voiceprint_character_name = voiceprint_assignment.character_name
+            voiceprint_confidence = voiceprint_assignment.confidence
         subtitle_segments.append(
             SubtitleSegment(
                 id=f"seg_{len(subtitle_segments) + 1:03d}",
                 start=item.start,
                 end=item.end,
-                speaker_id=assignment["speaker_id"],
-                raw_label=assignment["raw_label"],
-                display_name=assignment["display_name"],
+                speaker_id=speaker_id,
+                raw_label=raw_label,
+                display_name=display_name,
                 original_text=text,
                 edited_text=_preserve_edited_text(
                     previous_segments,
@@ -512,6 +540,9 @@ def apply_transcription_segments(
                     item.end,
                     edited_text,
                 ),
+                voiceprint_profile_id=voiceprint_profile_id,
+                voiceprint_character_name=voiceprint_character_name,
+                voiceprint_confidence=voiceprint_confidence,
             )
         )
 

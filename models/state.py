@@ -14,13 +14,20 @@ class SubtitleSegment:
     display_name: str
     original_text: str
     edited_text: str
+    voiceprint_profile_id: str = ""
+    voiceprint_character_name: str = ""
+    voiceprint_confidence: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SubtitleSegment":
-        return cls(**data)
+        payload = dict(data)
+        payload["voiceprint_profile_id"] = str(payload.get("voiceprint_profile_id", "")).strip()
+        payload["voiceprint_character_name"] = str(payload.get("voiceprint_character_name", "")).strip()
+        payload["voiceprint_confidence"] = float(payload.get("voiceprint_confidence", 0.0) or 0.0)
+        return cls(**payload)
 
 
 @dataclass

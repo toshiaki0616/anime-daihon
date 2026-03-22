@@ -31,17 +31,20 @@ from services import (
     PersistenceError,
     TranscriptionError,
     apply_dictionary,
+    assign_voiceprints_to_segments,
     build_voiceprint_sample,
     diarize_wav,
     ensure_dictionary_storage,
     ensure_voiceprint_storage,
     export_episode_csv,
     export_episode_txt,
+    extract_voice_embedding,
     load_library_state,
     load_voiceprint_state,
     preprocess_media,
     save_library_state,
     save_voiceprint_state,
+    SpeakerIdentificationError,
     sync_work_dictionary,
     transcribe_wav,
     upsert_voiceprint_profile,
@@ -372,8 +375,13 @@ def generate_subtitles(file_path: str | None, start_time: str, end_time: str, en
     episode.initial_prompt = initial_prompt.strip()
     prompt_text = build_transcription_prompt(state, initial_prompt)
     work_dictionary = None
+    voiceprint_profiles = []
     if work is not None:
         work_dictionary = sync_work_dictionary(DATA_DIR, work.work_id, work.title, work.character_names)
+        try:
+            voiceprint_profiles, _voiceprint_samples = load_voiceprint_state(DATA_DIR, work.work_id)
+        except PersistenceError:
+            voiceprint_profiles = []
 
     try:
         preprocess_result = preprocess_media(
@@ -395,6 +403,16 @@ def generate_subtitles(file_path: str | None, start_time: str, end_time: str, en
 
     diarization_segments = []
     diarization_failed = False
+    voiceprint_assignments = []
+    if voiceprint_profiles:
+        try:
+            voiceprint_assignments = assign_voiceprints_to_segments(
+                preprocess_result.wav_path,
+                transcription_segments,
+                voiceprint_profiles,
+            )
+        except SpeakerIdentificationError:
+            voiceprint_assignments = []
     progress(0.72, desc="話者ごとに分けています...")
     try:
         diarization_segments = diarize_wav(preprocess_result.wav_path)
@@ -411,6 +429,7 @@ def generate_subtitles(file_path: str | None, start_time: str, end_time: str, en
         transcription_segments=transcription_segments,
         diarization_segments=diarization_segments,
         text_postprocessor=lambda text: apply_dictionary(text, work_dictionary),
+        voiceprint_assignments=voiceprint_assignments,
     )
     progress(1.0, desc="字幕を作成しました")
     if diarization_failed:
@@ -642,6 +661,7 @@ def register_voiceprint(character_name: str | None, segment_id: str | None, stat
     ensure_voiceprint_storage(DATA_DIR, work.work_id)
     try:
         profiles, samples = load_voiceprint_state(DATA_DIR, work.work_id)
+        embedding = extract_voice_embedding(source_wav_path, segment.start, segment.end)
         sample = build_voiceprint_sample(
             episode_id=episode.episode_id,
             speaker_id=segment.speaker_id,
@@ -650,7 +670,7 @@ def register_voiceprint(character_name: str | None, segment_id: str | None, stat
             clip_start=segment.start,
             clip_end=segment.end,
             transcript_text=segment.edited_text,
-            embedding=[],
+            embedding=embedding,
         )
         profiles, samples, profile = upsert_voiceprint_profile(
             work_id=work.work_id,
@@ -660,6 +680,8 @@ def register_voiceprint(character_name: str | None, segment_id: str | None, stat
             samples=samples,
         )
         save_voiceprint_state(DATA_DIR, work.work_id, profiles, samples)
+    except SpeakerIdentificationError as exc:
+        return render_all(state, exc.user_message, "error")
     except PersistenceError as exc:
         return render_all(state, exc.user_message, "error")
 

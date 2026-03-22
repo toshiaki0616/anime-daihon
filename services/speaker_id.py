@@ -3,9 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from math import sqrt
+from os import getenv
 from pathlib import Path
+from typing import Any
 
 from models.state import VoiceprintProfile, VoiceprintSample
+from services.transcription import TranscriptionSegment
 
 
 class SpeakerIdentificationError(Exception):
@@ -20,6 +23,19 @@ class VoiceprintMatch:
     character_name: str
     confidence: float
     sample_count: int
+
+
+@dataclass
+class VoiceprintAssignment:
+    profile_id: str
+    character_name: str
+    confidence: float
+
+
+DEFAULT_EMBEDDING_MODEL = getenv("VOICEPRINT_EMBEDDING_MODEL", "pyannote/embedding")
+DEFAULT_AUTH_TOKEN = getenv("HF_TOKEN") or getenv("HUGGINGFACE_TOKEN")
+VOICEPRINT_THRESHOLD = float(getenv("VOICEPRINT_THRESHOLD", "0.45"))
+_EMBEDDING_INFERENCE_CACHE: dict[tuple[str, str], Any] = {}
 
 
 def now_label() -> str:
@@ -67,7 +83,7 @@ def average_embedding(samples: list[VoiceprintSample]) -> list[float]:
 
     size = len(valid[0])
     if any(len(vector) != size for vector in valid):
-        raise SpeakerIdentificationError("声紋ベクトルの次元が一致していません")
+        raise SpeakerIdentificationError("Voiceprint vector dimensions do not match")
 
     totals = [0.0] * size
     for vector in valid:
@@ -151,7 +167,7 @@ def score_voiceprint_profiles(
 def select_best_voiceprint_match(
     embedding: list[float],
     profiles: list[VoiceprintProfile],
-    threshold: float = 0.45,
+    threshold: float = VOICEPRINT_THRESHOLD,
 ) -> VoiceprintMatch | None:
     matches = score_voiceprint_profiles(embedding, profiles)
     if not matches:
@@ -162,11 +178,116 @@ def select_best_voiceprint_match(
     return best
 
 
-def extract_voice_embedding(wav_path: str, clip_start: float, clip_end: float) -> list[float]:
+def _load_embedding_inference(
+    model_name: str = DEFAULT_EMBEDDING_MODEL,
+    auth_token: str | None = DEFAULT_AUTH_TOKEN,
+):
+    cache_key = (model_name, auth_token or "")
+    if cache_key in _EMBEDDING_INFERENCE_CACHE:
+        return _EMBEDDING_INFERENCE_CACHE[cache_key]
+
+    try:
+        from pyannote.audio import Inference, Model  # type: ignore
+    except ImportError as exc:
+        raise SpeakerIdentificationError("pyannote.audio is required for voiceprint extraction") from exc
+
+    try:
+        model = Model.from_pretrained(model_name, use_auth_token=auth_token)
+        inference = Inference(model, window="whole")
+    except Exception as exc:  # noqa: BLE001
+        raise SpeakerIdentificationError("Failed to load the voiceprint embedding model") from exc
+
+    _EMBEDDING_INFERENCE_CACHE[cache_key] = inference
+    return inference
+
+
+def extract_voice_embedding(
+    wav_path: str,
+    clip_start: float,
+    clip_end: float,
+    model_name: str = DEFAULT_EMBEDDING_MODEL,
+    auth_token: str | None = DEFAULT_AUTH_TOKEN,
+) -> list[float]:
     source = Path(wav_path)
     if not source.exists() or not source.is_file():
-        raise SpeakerIdentificationError("声紋登録に失敗しました。音声ファイルが見つかりません")
+        raise SpeakerIdentificationError("Voiceprint extraction failed because the audio file was not found")
+    if clip_end <= clip_start:
+        raise SpeakerIdentificationError("Voiceprint extraction failed because the time range is invalid")
 
-    raise SpeakerIdentificationError(
-        "声紋抽出はまだ未実装です。Step 5 で pyannote の embedding 抽出を接続します"
-    )
+    inference = _load_embedding_inference(model_name=model_name, auth_token=auth_token)
+
+    try:
+        from pyannote.core import Segment  # type: ignore
+        import numpy as np
+    except ImportError as exc:
+        raise SpeakerIdentificationError("pyannote.core and numpy are required for voiceprint extraction") from exc
+
+    try:
+        embedding = inference.crop(str(source), Segment(clip_start, clip_end))
+        values = np.asarray(embedding, dtype=float).reshape(-1).tolist()
+    except Exception as exc:  # noqa: BLE001
+        raise SpeakerIdentificationError("Voiceprint extraction failed") from exc
+
+    normalized = _normalize_embedding([float(value) for value in values])
+    if not normalized:
+        raise SpeakerIdentificationError("Voiceprint extraction returned an empty embedding")
+    return normalized
+
+
+def _apply_continuity_rule(
+    assignments: list[VoiceprintAssignment | None],
+    segments: list[TranscriptionSegment],
+) -> list[VoiceprintAssignment | None]:
+    smoothed = list(assignments)
+    for index in range(1, len(smoothed)):
+        previous = smoothed[index - 1]
+        current = smoothed[index]
+        if previous is None or current is None:
+            continue
+        gap = segments[index].start - segments[index - 1].end
+        if gap > 0.6:
+            continue
+        if previous.character_name != current.character_name and current.confidence < previous.confidence + 0.08:
+            smoothed[index] = VoiceprintAssignment(
+                profile_id=previous.profile_id,
+                character_name=previous.character_name,
+                confidence=max(current.confidence, previous.confidence * 0.92),
+            )
+    return smoothed
+
+
+def assign_voiceprints_to_segments(
+    wav_path: str,
+    segments: list[TranscriptionSegment],
+    profiles: list[VoiceprintProfile],
+    threshold: float = VOICEPRINT_THRESHOLD,
+) -> list[VoiceprintAssignment | None]:
+    if not profiles:
+        return [None for _ in segments]
+
+    assignments: list[VoiceprintAssignment | None] = []
+    for segment in segments:
+        duration = segment.end - segment.start
+        if duration <= 0.35:
+            assignments.append(None)
+            continue
+        try:
+            embedding = extract_voice_embedding(wav_path, segment.start, segment.end)
+            best = select_best_voiceprint_match(embedding, profiles, threshold=threshold)
+        except SpeakerIdentificationError:
+            assignments.append(None)
+            continue
+
+        if best is None:
+            assignments.append(None)
+            continue
+
+        assignments.append(
+            VoiceprintAssignment(
+                profile_id=best.profile_id,
+                character_name=best.character_name,
+                confidence=best.confidence,
+            )
+        )
+
+    return _apply_continuity_rule(assignments, segments)

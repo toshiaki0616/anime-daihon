@@ -21,7 +21,9 @@ from .persistence import (
 from .preprocess import MediaPreprocessError, PreprocessResult, preprocess_media
 from .speaker_id import (
     SpeakerIdentificationError,
+    VoiceprintAssignment,
     VoiceprintMatch,
+    assign_voiceprints_to_segments,
     average_embedding,
     build_voiceprint_sample,
     cosine_similarity,
@@ -51,9 +53,11 @@ __all__ = [
     "SpeakerIdentificationError",
     "TranscriptionError",
     "TranscriptionSegment",
+    "VoiceprintAssignment",
     "VoiceprintMatch",
     "WorkDictionary",
     "apply_dictionary",
+    "assign_voiceprints_to_segments",
     "average_embedding",
     "build_voiceprint_sample",
     "cosine_similarity",
