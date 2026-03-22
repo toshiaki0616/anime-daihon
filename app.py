@@ -299,6 +299,19 @@ def build_voiceprint_character_choices(state: AppState):
     return [(name, name) for name in candidates]
 
 
+def build_subtitle_segment_choices(state: AppState):
+    episode = get_selected_episode(state)
+    if episode is None:
+        return []
+    return [
+        (
+            f"{segment.id} | {format_episode_seconds(episode, segment.source_start or segment.start)} | {_truncate_preview(segment.edited_text, 36)}",
+            segment.id,
+        )
+        for segment in episode.subtitle_segments
+    ]
+
+
 def build_voiceprint_summary(state: AppState) -> str:
     work = get_selected_work(state)
     if work is None:
@@ -398,6 +411,7 @@ def render_all(state: AppState, message: str, kind: str = "info"):
         build_subtitle_rows(state),
         state.selected_subtitle_segment_id,
         gr.update(value=build_selected_subtitle_label()),
+        gr.update(choices=build_subtitle_segment_choices(state), value=state.selected_subtitle_segment_id or None),
         gr.update(value=""),
         gr.update(value=None, visible=False),
         gr.update(choices=build_episode_speaker_choices(state), value=None),
@@ -850,9 +864,10 @@ def select_subtitle_segment(rows, state_dict: dict, evt: gr.SelectData):
     row_index = resolve_row_index(getattr(evt, "index", None))
     normalized_rows = rows.values.tolist() if hasattr(rows, "values") else rows or []
     speaker_choices = build_episode_speaker_choices(state)
+    segment_choices = build_subtitle_segment_choices(state)
     if row_index is None or row_index >= len(normalized_rows):
         state.selected_subtitle_segment_id = ""
-        return "", gr.update(value=build_selected_subtitle_label()), gr.update(value=""), gr.update(value=None, visible=False), gr.update(choices=speaker_choices, value=None)
+        return "", gr.update(value=build_selected_subtitle_label()), gr.update(choices=segment_choices, value=None), gr.update(value=""), gr.update(value=None, visible=False), gr.update(choices=speaker_choices, value=None)
 
     row = normalized_rows[row_index]
     segment_id = str(row[0]) if row else ""
@@ -872,9 +887,49 @@ def select_subtitle_segment(rows, state_dict: dict, evt: gr.SelectData):
     return (
         segment_id,
         gr.update(value=build_selected_subtitle_label(start_label, duration_label, speaker_name, preview[:60])),
+        gr.update(choices=segment_choices, value=segment_id),
         gr.update(value=speaker_name),
         audio_update,
         gr.update(choices=speaker_choices, value=current_speaker_id),
+    )
+
+
+def select_subtitle_segment_by_id(segment_id: str | None, state_dict: dict):
+    state = parse_state(state_dict)
+    episode = get_selected_episode(state)
+    speaker_choices = build_episode_speaker_choices(state)
+    segment_choices = build_subtitle_segment_choices(state)
+    target_segment_id = (segment_id or "").strip()
+    if episode is None or not target_segment_id:
+        state.selected_subtitle_segment_id = ""
+        return "", gr.update(value=build_selected_subtitle_label()), gr.update(choices=segment_choices, value=None), gr.update(value=""), gr.update(value=None, visible=False), gr.update(choices=speaker_choices, value=None)
+
+    segment = next((item for item in episode.subtitle_segments if item.id == target_segment_id), None)
+    if segment is None:
+        state.selected_subtitle_segment_id = ""
+        return "", gr.update(value=build_selected_subtitle_label()), gr.update(choices=segment_choices, value=None), gr.update(value=""), gr.update(value=None, visible=False), gr.update(choices=speaker_choices, value=None)
+
+    state.selected_subtitle_segment_id = segment.id
+    speaker_name = segment.display_name
+    if segment.voiceprint_profile_id:
+        speaker_name = f"{'MEDIUM' if segment.voiceprint_confidence < 0.75 else ''}".strip()
+        speaker_name = f"{speaker_name + ' | ' if speaker_name else ''}{segment.display_name}"
+    else:
+        speaker_name = f"UNKNOWN | {segment.display_name}"
+    return (
+        segment.id,
+        gr.update(
+            value=build_selected_subtitle_label(
+                f"[{format_episode_seconds(episode, segment.source_start or segment.start)}]",
+                f"{max(0.0, segment.end - segment.start):.2f}s",
+                speaker_name,
+                segment.edited_text[:60],
+            )
+        ),
+        gr.update(choices=segment_choices, value=segment.id),
+        gr.update(value=speaker_name),
+        build_selected_segment_audio_update(episode, segment),
+        gr.update(choices=speaker_choices, value=segment.speaker_id),
     )
 
 
@@ -1211,6 +1266,7 @@ with gr.Blocks(title="字幕ライブラリ", css=custom_css) as demo:
             selected_subtitle_segment = gr.State(value="")
             with gr.Row():
                 selected_subtitle_label = gr.Markdown("話者欄をクリックして変更するセリフを選択してください")
+                selected_subtitle_picker = gr.Dropdown(label="選択セリフ", choices=[], value=None)
                 selected_subtitle_current_speaker = gr.Textbox(label="現在の話者", interactive=False, value="")
                 selected_subtitle_audio = gr.Audio(label="選択セリフ音声", interactive=False, visible=False, type="filepath")
             with gr.Row():
@@ -1312,6 +1368,7 @@ with gr.Blocks(title="字幕ライブラリ", css=custom_css) as demo:
         subtitle_table,
         selected_subtitle_segment,
         selected_subtitle_label,
+        selected_subtitle_picker,
         selected_subtitle_current_speaker,
         selected_subtitle_audio,
         speaker_change_target,
@@ -1372,7 +1429,13 @@ with gr.Blocks(title="字幕ライブラリ", css=custom_css) as demo:
     subtitle_table.select(
         fn=select_subtitle_segment,
         inputs=[subtitle_table, app_state],
-        outputs=[selected_subtitle_segment, selected_subtitle_label, selected_subtitle_current_speaker, selected_subtitle_audio, speaker_change_target],
+        outputs=[selected_subtitle_segment, selected_subtitle_label, selected_subtitle_picker, selected_subtitle_current_speaker, selected_subtitle_audio, speaker_change_target],
+        queue=False,
+    )
+    selected_subtitle_picker.change(
+        fn=select_subtitle_segment_by_id,
+        inputs=[selected_subtitle_picker, app_state],
+        outputs=[selected_subtitle_segment, selected_subtitle_label, selected_subtitle_picker, selected_subtitle_current_speaker, selected_subtitle_audio, speaker_change_target],
         queue=False,
     )
     apply_speaker_change_button.click(
