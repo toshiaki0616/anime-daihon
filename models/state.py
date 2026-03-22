@@ -194,6 +194,28 @@ class Work:
 
 
 @dataclass
+class VoiceprintCandidate:
+    candidate_id: str
+    episode_id: str
+    source_segment_id: str
+    speaker_id: str
+    clip_start: float
+    clip_end: float
+    transcript_text: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "VoiceprintCandidate":
+        payload = dict(data)
+        payload["clip_start"] = float(payload.get("clip_start", 0.0) or 0.0)
+        payload["clip_end"] = float(payload.get("clip_end", 0.0) or 0.0)
+        payload["transcript_text"] = str(payload.get("transcript_text", "")).strip()
+        return cls(**payload)
+
+
+@dataclass
 class AppState:
     works: list[Work] = field(default_factory=list)
     current_page: str = "work_list"
@@ -206,6 +228,9 @@ class AppState:
     rerun_candidate_text: str = ""
     rerun_candidate_label: str = ""
     rerun_candidate_range: str = ""
+    voiceprint_candidates: list[VoiceprintCandidate] = field(default_factory=list)
+    selected_voiceprint_candidate_id: str = ""
+    selected_voiceprint_character_name: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -220,6 +245,11 @@ class AppState:
             "rerun_candidate_text": self.rerun_candidate_text,
             "rerun_candidate_label": self.rerun_candidate_label,
             "rerun_candidate_range": self.rerun_candidate_range,
+            "voiceprint_candidates": [
+                candidate.to_dict() for candidate in self.voiceprint_candidates
+            ],
+            "selected_voiceprint_candidate_id": self.selected_voiceprint_candidate_id,
+            "selected_voiceprint_character_name": self.selected_voiceprint_character_name,
         }
 
     @classmethod
@@ -236,4 +266,10 @@ class AppState:
             rerun_candidate_text=data.get("rerun_candidate_text", ""),
             rerun_candidate_label=data.get("rerun_candidate_label", ""),
             rerun_candidate_range=data.get("rerun_candidate_range", ""),
+            voiceprint_candidates=[
+                VoiceprintCandidate.from_dict(candidate)
+                for candidate in data.get("voiceprint_candidates", [])
+            ],
+            selected_voiceprint_candidate_id=data.get("selected_voiceprint_candidate_id", ""),
+            selected_voiceprint_character_name=data.get("selected_voiceprint_character_name", ""),
         )
