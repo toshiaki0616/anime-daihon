@@ -1,9 +1,11 @@
 from .dictionary import (
+    build_prompt_dictionary,
     DictionaryEntry,
     WorkDictionary,
     apply_dictionary,
     ensure_dictionary_storage,
     load_work_dictionary,
+    merge_dictionaries,
     save_work_dictionary,
     sync_work_dictionary,
 )
@@ -57,6 +59,7 @@ __all__ = [
     "VoiceprintMatch",
     "WorkDictionary",
     "apply_dictionary",
+    "build_prompt_dictionary",
     "assign_voiceprints_to_segments",
     "average_embedding",
     "build_voiceprint_sample",
@@ -72,6 +75,7 @@ __all__ = [
     "load_voiceprint_state",
     "load_work_dictionary",
     "normalize_model_selection",
+    "merge_dictionaries",
     "preprocess_media",
     "save_library_state",
     "save_voiceprint_state",

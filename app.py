@@ -35,6 +35,7 @@ from services import (
     apply_dictionary,
     assign_voiceprints_to_segments,
     build_voiceprint_sample,
+    build_prompt_dictionary,
     diarize_wav,
     ensure_dictionary_storage,
     ensure_voiceprint_storage,
@@ -45,6 +46,7 @@ from services import (
     load_library_state,
     load_voiceprint_state,
     load_work_dictionary,
+    merge_dictionaries,
     preprocess_media,
     save_library_state,
     save_voiceprint_state,
@@ -632,6 +634,7 @@ def generate_subtitles(file_path: str | None, start_time: str, end_time: str, en
     voiceprint_profiles = []
     if work is not None:
         work_dictionary = sync_work_dictionary(DATA_DIR, work.work_id, work.title, work.character_names)
+        work_dictionary = merge_dictionaries(work_dictionary, build_prompt_dictionary(initial_prompt))
         try:
             voiceprint_profiles, _voiceprint_samples = load_voiceprint_state(DATA_DIR, work.work_id)
         except PersistenceError:
