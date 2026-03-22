@@ -9,6 +9,8 @@ class SubtitleSegment:
     id: str
     start: float
     end: float
+    source_start: float = 0.0
+    source_end: float = 0.0
     speaker_id: str
     raw_label: str
     display_name: str
@@ -24,6 +26,8 @@ class SubtitleSegment:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SubtitleSegment":
         payload = dict(data)
+        payload["source_start"] = float(payload.get("source_start", payload.get("start", 0.0)) or 0.0)
+        payload["source_end"] = float(payload.get("source_end", payload.get("end", 0.0)) or 0.0)
         payload["voiceprint_profile_id"] = str(payload.get("voiceprint_profile_id", "")).strip()
         payload["voiceprint_character_name"] = str(payload.get("voiceprint_character_name", "")).strip()
         payload["voiceprint_confidence"] = float(payload.get("voiceprint_confidence", 0.0) or 0.0)

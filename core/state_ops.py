@@ -540,6 +540,8 @@ def apply_transcription_segments(
                 id=f"seg_{len(subtitle_segments) + 1:03d}",
                 start=item.start,
                 end=item.end,
+                source_start=item.source_start if item.source_start is not None else item.start,
+                source_end=item.source_end if item.source_end is not None else item.end,
                 speaker_id=speaker_id,
                 raw_label=raw_label,
                 display_name=display_name,

@@ -17,6 +17,8 @@ class TranscriptionSegment:
     start: float
     end: float
     text: str
+    source_start: float | None = None
+    source_end: float | None = None
 
 
 DEFAULT_MODEL_NAME = "anime_whisper"
@@ -126,7 +128,15 @@ def split_subtitle_segments(segments: list[TranscriptionSegment]) -> list[Transc
         final_chunks = _merge_short_chunks(final_chunks)
 
         if len(final_chunks) <= 1:
-            expanded.append(TranscriptionSegment(start=segment.start, end=segment.end, text=text))
+            expanded.append(
+                TranscriptionSegment(
+                    start=segment.start,
+                    end=segment.end,
+                    text=text,
+                    source_start=segment.source_start if segment.source_start is not None else segment.start,
+                    source_end=segment.source_end if segment.source_end is not None else segment.end,
+                )
+            )
             continue
 
         total_weight = sum(max(len(chunk.strip()), 1) for chunk in final_chunks)
@@ -145,6 +155,8 @@ def split_subtitle_segments(segments: list[TranscriptionSegment]) -> list[Transc
                     start=current_start,
                     end=chunk_end,
                     text=chunk,
+                    source_start=segment.source_start if segment.source_start is not None else segment.start,
+                    source_end=segment.source_end if segment.source_end is not None else segment.end,
                 )
             )
             current_start = chunk_end
@@ -224,6 +236,8 @@ def transcribe_wav(
                 start=float(getattr(item, "start", 0.0)),
                 end=float(getattr(item, "end", 0.0)),
                 text=text,
+                source_start=float(getattr(item, "start", 0.0)),
+                source_end=float(getattr(item, "end", 0.0)),
             )
         )
 
