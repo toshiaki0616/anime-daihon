@@ -7,7 +7,14 @@ from .persistence import (
     save_library_state,
 )
 from .preprocess import MediaPreprocessError, PreprocessResult, preprocess_media
-from .transcription import MODEL_OPTIONS, TranscriptionError, TranscriptionSegment, transcribe_wav
+from .transcription import (
+    DEFAULT_MODEL_NAME,
+    MODEL_OPTIONS,
+    TranscriptionError,
+    TranscriptionSegment,
+    normalize_model_selection,
+    transcribe_wav,
+)
 
 __all__ = [
     "DiarizationError",
@@ -15,9 +22,11 @@ __all__ = [
     "MediaPreprocessError",
     "PersistenceError",
     "PreprocessResult",
+    "DEFAULT_MODEL_NAME",
     "MODEL_OPTIONS",
     "TranscriptionError",
     "TranscriptionSegment",
+    "normalize_model_selection",
     "diarize_wav",
     "export_episode_csv",
     "export_episode_txt",

@@ -37,7 +37,9 @@ from services import (
     preprocess_media,
     save_library_state,
     transcribe_wav,
+    DEFAULT_MODEL_NAME,
     MODEL_OPTIONS,
+    normalize_model_selection,
 )
 from ui.renderers import (
     build_episode_rows,
@@ -151,7 +153,7 @@ def render_all(state: AppState, message: str, kind: str = "info"):
         episode.range_start if episode else "",
         episode.range_end if episode else "",
         episode.enhance_audio if episode else False,
-        episode.whisper_model if episode else "base",
+        normalize_model_selection(episode.whisper_model) if episode else DEFAULT_MODEL_NAME,
         episode.initial_prompt if episode else "",
         build_subtitle_rows(state),
         "",
@@ -302,7 +304,7 @@ def generate_subtitles(file_path: str | None, start_time: str, end_time: str, en
     episode.range_start = start_time.strip()
     episode.range_end = end_time.strip()
     episode.enhance_audio = enhance_audio
-    episode.whisper_model = whisper_model or "base"
+    episode.whisper_model = normalize_model_selection(whisper_model)
     episode.initial_prompt = initial_prompt.strip()
     prompt_text = build_transcription_prompt(state, initial_prompt)
 
@@ -321,8 +323,8 @@ def generate_subtitles(file_path: str | None, start_time: str, end_time: str, en
         )
     except MediaPreprocessError as exc:
         return render_all(state, exc.user_message, "error")
-    except TranscriptionError:
-        return render_all(state, "字幕の作成に失敗しました", "error")
+    except TranscriptionError as exc:
+        return render_all(state, exc.user_message, "error")
 
     diarization_segments = []
     diarization_failed = False
@@ -600,13 +602,13 @@ def preview_partial_rerun(segment_id: str | None, state_dict: dict, progress=gr.
         progress(0.55, desc="候補を文字にしています...")
         transcription_segments = transcribe_wav(
             preprocess_result.wav_path,
-            model_name=episode.whisper_model or "base",
+            model_name=normalize_model_selection(episode.whisper_model),
             initial_prompt=prompt_text,
         )
     except MediaPreprocessError as exc:
         return render_all(state, exc.user_message, "error")
-    except TranscriptionError:
-        return render_all(state, "字幕の作成に失敗しました", "error")
+    except TranscriptionError as exc:
+        return render_all(state, exc.user_message, "error")
 
     candidate_text = "".join(item.text.strip() for item in transcription_segments if item.text.strip()).strip()
     if not candidate_text:
@@ -718,7 +720,7 @@ with gr.Blocks(title="字幕ライブラリ", css=custom_css) as demo:
                     start_input = gr.Textbox(label="開始時刻", placeholder="00:00:00")
                     end_input = gr.Textbox(label="終了時刻", placeholder="00:00:00")
                     enhance_toggle = gr.Checkbox(label="音声を聞き取りやすくする", value=False)
-                    whisper_model_input = gr.Dropdown(label="文字起こし精度", choices=MODEL_OPTIONS, value="base")
+                    whisper_model_input = gr.Dropdown(label="文字起こしエンジン", choices=MODEL_OPTIONS, value=DEFAULT_MODEL_NAME)
                     initial_prompt_input = gr.Textbox(label="補助プロンプト", lines=4, placeholder="例: 固有名詞候補、言い間違えやすい単語、キャラ名")
                     generate_button = gr.Button("字幕を作成", variant="primary")
             subtitle_table = gr.Dataframe(
