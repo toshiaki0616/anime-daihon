@@ -592,15 +592,15 @@ def apply_subtitle_edits(state: AppState, rows: list[list[str]]) -> AppState:
     episode = get_selected_episode(next_state)
     if episode is None:
         return next_state
-    row_map = {row[0]: row for row in rows if len(row) >= 4}
+    row_map = {row[0]: row for row in rows if len(row) >= 5}
     for segment in episode.subtitle_segments:
         row = row_map.get(segment.id)
         if not row:
             continue
-        manual_speaker_id = _resolve_manual_speaker_id(episode, str(row[2]))
+        manual_speaker_id = _resolve_manual_speaker_id(episode, str(row[3]))
         if manual_speaker_id:
             segment.speaker_id = manual_speaker_id
-        segment.edited_text = str(row[3])
+        segment.edited_text = str(row[4])
     sync_episode(episode)
     _touch_work_for_episode(next_state, episode)
     return next_state

@@ -834,9 +834,10 @@ def select_subtitle_segment(rows, state_dict: dict, evt: gr.SelectData):
 
     row = normalized_rows[row_index]
     segment_id = str(row[0]) if row else ""
-    timestamp = str(row[1]) if len(row) > 1 else ""
-    speaker_name = str(row[2]) if len(row) > 2 else ""
-    preview = str(row[3]) if len(row) > 3 else ""
+    start_label = str(row[1]) if len(row) > 1 else ""
+    duration_label = str(row[2]) if len(row) > 2 else ""
+    speaker_name = str(row[3]) if len(row) > 3 else ""
+    preview = str(row[4]) if len(row) > 4 else ""
     episode = get_selected_episode(state)
     current_speaker_id = None
     if episode is not None:
@@ -846,7 +847,7 @@ def select_subtitle_segment(rows, state_dict: dict, evt: gr.SelectData):
             state.selected_subtitle_segment_id = segment.id
     return (
         segment_id,
-        gr.update(value=f"選択中: {timestamp} {speaker_name} / {preview[:40]}"),
+        gr.update(value=f"選択中: {start_label} / {duration_label} / {speaker_name} / {preview[:40]}"),
         gr.update(value=speaker_name),
         gr.update(choices=speaker_choices, value=current_speaker_id),
     )
@@ -1145,8 +1146,8 @@ with gr.Blocks(title="字幕ライブラリ", css=custom_css) as demo:
                     initial_prompt_input = gr.Textbox(label="補助プロンプト", lines=4, placeholder="例: 固有名詞候補、言い間違えやすい単語、キャラ名")
                     generate_button = gr.Button("字幕を作成", variant="primary")
             subtitle_table = gr.Dataframe(
-                headers=["segment_id", "時刻", "話者", "セリフ"],
-                datatype=["str", "str", "str", "str"],
+                headers=["segment_id", "開始", "長さ", "話者", "セリフ"],
+                datatype=["str", "str", "str", "str", "str"],
                 interactive=True,
                 value=[],
                 wrap=True,

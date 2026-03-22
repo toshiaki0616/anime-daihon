@@ -53,7 +53,13 @@ def build_subtitle_rows(state: AppState) -> list[list[str]]:
     if episode is None:
         return []
     return [
-        [segment.id, f"[{format_seconds(segment.start)}]", _build_segment_speaker_label(segment), segment.edited_text]
+        [
+            segment.id,
+            f"[{format_seconds(segment.start)}]",
+            f"{max(0.0, segment.end - segment.start):.2f}s",
+            _build_segment_speaker_label(segment),
+            segment.edited_text,
+        ]
         for segment in episode.subtitle_segments
     ]
 
