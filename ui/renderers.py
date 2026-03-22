@@ -31,6 +31,26 @@ def format_timestamp(value: str) -> str:
     return value.replace("T", " ") if value else "-"
 
 
+def parse_time_offset_seconds(value: str) -> float:
+    text = (value or "").strip()
+    if not text:
+        return 0.0
+    parts = text.split(":")
+    try:
+        if len(parts) == 3:
+            hours = int(parts[0])
+            minutes = int(parts[1])
+            seconds = float(parts[2])
+            return (hours * 3600) + (minutes * 60) + seconds
+        if len(parts) == 2:
+            minutes = int(parts[0])
+            seconds = float(parts[1])
+            return (minutes * 60) + seconds
+        return float(text)
+    except ValueError:
+        return 0.0
+
+
 def build_work_rows(state: AppState) -> list[list[str]]:
     return [
         [work.title, str(len(work.episodes)), format_timestamp(work.updated_at)]
@@ -52,10 +72,11 @@ def build_subtitle_rows(state: AppState) -> list[list[str]]:
     episode = get_selected_episode(state)
     if episode is None:
         return []
+    time_offset = parse_time_offset_seconds(episode.range_start)
     return [
         [
             segment.id,
-            f"[{format_seconds(segment.start)}]",
+            f"[{format_seconds(time_offset + segment.start)}]",
             f"{max(0.0, segment.end - segment.start):.2f}s",
             _build_segment_speaker_label(segment),
             segment.edited_text,
@@ -126,14 +147,14 @@ def build_speaker_detail_payload(state: AppState) -> dict[str, Any]:
         return empty_payload
 
     lines = [
-        f"<li><span class='speaker-time'>[{format_seconds(segment.start)}]</span><span>{segment.edited_text}</span></li>"
+        f"<li><span class='speaker-time'>[{format_seconds(parse_time_offset_seconds(episode.range_start) + segment.start)}]</span><span>{segment.edited_text}</span></li>"
         for segment in episode.subtitle_segments
         if segment.speaker_id == speaker.speaker_id
     ]
     sample_lines = "".join(lines) if lines else "<li class='speaker-empty'>まだこの話者にセリフはありません。</li>"
     speaker_choices = [(item.display_name or item.raw_label, item.speaker_id) for item in episode.speakers]
     move_segment_choices = [
-        (f"[{format_seconds(segment.start)}] {segment.edited_text[:50]}", segment.id)
+        (f"[{format_seconds(parse_time_offset_seconds(episode.range_start) + segment.start)}] {segment.edited_text[:50]}", segment.id)
         for segment in episode.subtitle_segments
         if segment.speaker_id == speaker.speaker_id
     ]

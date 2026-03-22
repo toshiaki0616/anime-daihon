@@ -206,14 +206,8 @@ def transcribe_wav(
             str(source),
             language="ja",
             beam_size=5,
-            vad_filter=True,
-            vad_parameters={
-                "min_silence_duration_ms": 500,
-                "speech_pad_ms": 200,
-            },
+            vad_filter=False,
             condition_on_previous_text=True,
-            no_repeat_ngram_size=7,
-            repetition_penalty=1.1,
         )
     except TranscriptionError:
         raise

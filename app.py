@@ -63,6 +63,7 @@ from ui.renderers import (
     build_work_rows,
     format_seconds,
     format_status_box,
+    parse_time_offset_seconds,
 )
 
 DATA_DIR = Path(__file__).parent / "data"
@@ -211,11 +212,12 @@ def build_voiceprint_candidates_for_episode(state: AppState) -> list[VoiceprintC
 
 def build_voiceprint_candidate_choices(state: AppState):
     normalize_voiceprint_candidate_state(state)
+    episode = get_selected_episode(state)
     choices = []
     for candidate in state.voiceprint_candidates:
         duration = max(0.0, candidate.clip_end - candidate.clip_start)
         label = (
-            f"[{format_seconds(candidate.clip_start)} - {format_seconds(candidate.clip_end)}] "
+            f"[{format_episode_seconds(episode, candidate.clip_start)} - {format_episode_seconds(episode, candidate.clip_end)}] "
             f"{duration:.2f}s / {_truncate_preview(candidate.transcript_text)}"
         )
         choices.append((label, candidate.candidate_id))
@@ -232,6 +234,11 @@ def find_selected_voiceprint_candidate(state: AppState) -> VoiceprintCandidate |
         ),
         None,
     )
+
+
+def format_episode_seconds(episode, seconds: float) -> str:
+    offset = parse_time_offset_seconds(episode.range_start) if episode is not None else 0.0
+    return format_seconds(offset + seconds)
 
 
 def sorted_episodes_for_selected_work(state: AppState):
@@ -298,23 +305,23 @@ def build_voiceprint_summary(state: AppState) -> str:
 
 def build_voiceprint_selection_label(state: AppState) -> str:
     normalize_voiceprint_candidate_state(state)
+    episode = get_selected_episode(state)
     selected_candidate = find_selected_voiceprint_candidate(state)
     if selected_candidate is not None:
         duration = max(0.0, selected_candidate.clip_end - selected_candidate.clip_start)
         return (
             "選択中サンプル: "
-            f"[{format_seconds(selected_candidate.clip_start)} - {format_seconds(selected_candidate.clip_end)}] "
+            f"[{format_episode_seconds(episode, selected_candidate.clip_start)} - {format_episode_seconds(episode, selected_candidate.clip_end)}] "
             f"{duration:.2f}s / {_truncate_preview(selected_candidate.transcript_text, limit=64)}"
         )
 
-    episode = get_selected_episode(state)
     segment_id = state.selected_subtitle_segment_id
     if episode is None or not segment_id:
         return "声紋サンプルを作成すると、3秒前後の候補をここから選べます。"
     segment = next((item for item in episode.subtitle_segments if item.id == segment_id), None)
     if segment is None:
         return "声紋サンプルを作成すると、3秒前後の候補をここから選べます。"
-    return f"現在の行: [{format_seconds(segment.start)}] {_truncate_preview(segment.edited_text)}"
+    return f"現在の行: [{format_episode_seconds(episode, segment.start)}] {_truncate_preview(segment.edited_text)}"
 
 
 def build_dictionary_rows(state: AppState):
@@ -1029,7 +1036,7 @@ def preview_partial_rerun(segment_id: str | None, state_dict: dict, progress=gr.
         return render_all(state, "再読み込み候補を取得できませんでした", "error")
 
     state.selected_subtitle_segment_id = segment.id
-    state.selected_subtitle_preview = f"[{format_seconds(segment.start)}] {segment.edited_text[:40]}"
+    state.selected_subtitle_preview = f"[{format_episode_seconds(episode, segment.start)}] {segment.edited_text[:40]}"
     state.rerun_candidate_label = "再読み込み候補を取得しました。反映するか確認してください。"
     state.rerun_candidate_range = f"{range_start} - {range_end}"
     state.rerun_candidate_text = candidate_text
