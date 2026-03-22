@@ -40,6 +40,55 @@ class SpeakerProfile:
 
 
 @dataclass
+class VoiceprintSample:
+    sample_id: str
+    episode_id: str
+    speaker_id: str
+    character_name: str
+    source_wav_path: str
+    clip_start: float
+    clip_end: float
+    transcript_text: str = ""
+    embedding: list[float] = field(default_factory=list)
+    created_at: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "VoiceprintSample":
+        payload = dict(data)
+        payload["embedding"] = [float(value) for value in payload.get("embedding", [])]
+        return cls(**payload)
+
+
+@dataclass
+class VoiceprintProfile:
+    profile_id: str
+    work_id: str
+    character_name: str
+    sample_ids: list[str] = field(default_factory=list)
+    sample_count: int = 0
+    average_embedding: list[float] = field(default_factory=list)
+    notes: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "VoiceprintProfile":
+        payload = dict(data)
+        payload["sample_ids"] = [str(value) for value in payload.get("sample_ids", [])]
+        payload["average_embedding"] = [
+            float(value)
+            for value in payload.get("average_embedding", [])
+        ]
+        return cls(**payload)
+
+
+@dataclass
 class Episode:
     episode_id: str
     title: str

@@ -3,4 +3,5 @@ __pycache__/
 *.pyc
 data/processed/
 data/dictionaries/*.json
+data/voiceprints/**/*.json
 models/anime-whisper-ct2/

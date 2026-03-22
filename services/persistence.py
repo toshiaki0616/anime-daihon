@@ -7,7 +7,7 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
-from models.state import AppState, Episode, Work
+from models.state import AppState, Episode, VoiceprintProfile, VoiceprintSample, Work
 
 
 class PersistenceError(Exception):
@@ -19,6 +19,7 @@ class PersistenceError(Exception):
 WORKS_DIRNAME = "works"
 EPISODES_DIRNAME = "episodes"
 EXPORTS_DIRNAME = "exports"
+VOICEPRINTS_DIRNAME = "voiceprints"
 
 
 def _works_dir(data_dir: Path) -> Path:
@@ -33,10 +34,19 @@ def _exports_dir(data_dir: Path) -> Path:
     return data_dir / EXPORTS_DIRNAME
 
 
+def _voiceprints_root_dir(data_dir: Path) -> Path:
+    return data_dir / VOICEPRINTS_DIRNAME
+
+
+def _voiceprints_dir(data_dir: Path, work_id: str) -> Path:
+    return _voiceprints_root_dir(data_dir) / work_id
+
+
 def _ensure_storage_dirs(data_dir: Path) -> None:
     _works_dir(data_dir).mkdir(parents=True, exist_ok=True)
     _episodes_dir(data_dir).mkdir(parents=True, exist_ok=True)
     _exports_dir(data_dir).mkdir(parents=True, exist_ok=True)
+    _voiceprints_root_dir(data_dir).mkdir(parents=True, exist_ok=True)
 
 
 def _json_dump(path: Path, payload: dict) -> None:
@@ -45,6 +55,13 @@ def _json_dump(path: Path, payload: dict) -> None:
 
 def _json_load(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def ensure_voiceprint_storage(data_dir: Path, work_id: str) -> Path:
+    _ensure_storage_dirs(data_dir)
+    target = _voiceprints_dir(data_dir, work_id)
+    target.mkdir(parents=True, exist_ok=True)
+    return target
 
 
 def _safe_slug(value: str) -> str:
@@ -129,6 +146,70 @@ def load_library_state(data_dir: Path) -> AppState:
         return AppState(works=works, current_page="work_list")
     except Exception as exc:  # noqa: BLE001
         raise PersistenceError("読み込みに失敗しました") from exc
+
+
+def save_voiceprint_state(
+    data_dir: Path,
+    work_id: str,
+    profiles: list[VoiceprintProfile],
+    samples: list[VoiceprintSample],
+) -> None:
+    voiceprints_dir = ensure_voiceprint_storage(data_dir, work_id)
+    samples_dir = voiceprints_dir / "samples"
+    samples_dir.mkdir(parents=True, exist_ok=True)
+
+    profile_ids = {profile.profile_id for profile in profiles}
+    sample_ids = {sample.sample_id for sample in samples}
+
+    try:
+        profiles_payload = {
+            "work_id": work_id,
+            "profiles": [profile.to_dict() for profile in profiles],
+        }
+        _json_dump(voiceprints_dir / "profiles.json", profiles_payload)
+
+        for sample in samples:
+            _json_dump(samples_dir / f"{sample.sample_id}.json", sample.to_dict())
+
+        for path in samples_dir.glob("*.json"):
+            if path.stem not in sample_ids:
+                path.unlink(missing_ok=True)
+
+        # Remove profiles file if there are no profiles and no samples.
+        if not profile_ids and not sample_ids:
+            (voiceprints_dir / "profiles.json").unlink(missing_ok=True)
+    except Exception as exc:  # noqa: BLE001
+        raise PersistenceError("声紋データの保存に失敗しました") from exc
+
+
+def load_voiceprint_state(
+    data_dir: Path,
+    work_id: str,
+) -> tuple[list[VoiceprintProfile], list[VoiceprintSample]]:
+    voiceprints_dir = _voiceprints_dir(data_dir, work_id)
+    profiles_path = voiceprints_dir / "profiles.json"
+    samples_dir = voiceprints_dir / "samples"
+
+    if not voiceprints_dir.exists():
+        return [], []
+
+    try:
+        profiles: list[VoiceprintProfile] = []
+        if profiles_path.exists():
+            payload = _json_load(profiles_path)
+            profiles = [
+                VoiceprintProfile.from_dict(item)
+                for item in payload.get("profiles", [])
+            ]
+
+        samples: list[VoiceprintSample] = []
+        if samples_dir.exists():
+            for sample_path in sorted(samples_dir.glob("*.json")):
+                samples.append(VoiceprintSample.from_dict(_json_load(sample_path)))
+
+        return profiles, samples
+    except Exception as exc:  # noqa: BLE001
+        raise PersistenceError("声紋データの読み込みに失敗しました") from exc
 
 
 def export_episode_txt(work: Work, episode: Episode, data_dir: Path) -> str:

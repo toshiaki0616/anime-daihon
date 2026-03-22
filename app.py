@@ -33,6 +33,7 @@ from services import (
     apply_dictionary,
     diarize_wav,
     ensure_dictionary_storage,
+    ensure_voiceprint_storage,
     export_episode_csv,
     export_episode_txt,
     load_library_state,
@@ -73,6 +74,7 @@ def load_initial_state() -> tuple[AppState, str, str]:
 
     for work in state.works:
         sync_work_dictionary(DATA_DIR, work.work_id, work.title, work.character_names)
+        ensure_voiceprint_storage(DATA_DIR, work.work_id)
         for episode in work.episodes:
             sync_episode(episode)
     return state, "保存済みライブラリを読み込みました", "info"
@@ -214,6 +216,7 @@ def add_work(state_dict: dict):
     work = get_selected_work(state)
     if work is not None:
         sync_work_dictionary(DATA_DIR, work.work_id, work.title, work.character_names)
+        ensure_voiceprint_storage(DATA_DIR, work.work_id)
     return render_all(state, "新しい作品を追加しました", "success")
 
 
@@ -228,6 +231,7 @@ def reload_library(state_dict: dict | None = None):
         return render_all(state, "保存済みデータがないためモックライブラリを表示しています", "info")
     for work in state.works:
         sync_work_dictionary(DATA_DIR, work.work_id, work.title, work.character_names)
+        ensure_voiceprint_storage(DATA_DIR, work.work_id)
         for episode in work.episodes:
             sync_episode(episode)
     return render_all(state, "保存済みライブラリを再読込しました", "success")
