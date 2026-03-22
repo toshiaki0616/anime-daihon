@@ -486,6 +486,15 @@ def sync_subtitle_edits(rows, state_dict: dict):
     return render_all(state, "字幕編集を反映しました", "success")
 
 
+def sync_subtitle_edits_inline(rows, state_dict: dict):
+    normalized_rows = rows.values.tolist() if hasattr(rows, "values") else rows or []
+    state = apply_subtitle_edits(parse_state(state_dict), normalized_rows)
+    return [
+        state.to_dict(),
+        format_status_box("字幕編集を一時反映しました", "info"),
+    ]
+
+
 def save_current_episode(state_dict: dict):
     state = parse_state(state_dict)
     work = get_selected_work(state)
@@ -1075,7 +1084,12 @@ with gr.Blocks(title="字幕ライブラリ", css=custom_css) as demo:
     episode_table.select(fn=open_episode, inputs=[app_state], outputs=full_outputs, queue=False)
     back_to_detail_button.click(fn=back_to_work_detail, inputs=[app_state], outputs=full_outputs, queue=False)
     generate_button.click(fn=generate_subtitles, inputs=[file_input, start_input, end_input, enhance_toggle, whisper_model_input, initial_prompt_input, app_state], outputs=full_outputs, queue=True)
-    subtitle_table.change(fn=sync_subtitle_edits, inputs=[subtitle_table, app_state], outputs=full_outputs, queue=False)
+    subtitle_table.change(
+        fn=sync_subtitle_edits_inline,
+        inputs=[subtitle_table, app_state],
+        outputs=[app_state, status_box],
+        queue=False,
+    )
     subtitle_table.select(
         fn=select_subtitle_segment,
         inputs=[subtitle_table, app_state],
