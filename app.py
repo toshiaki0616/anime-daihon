@@ -26,6 +26,7 @@ from core.state_ops import (
 )
 from models.state import AppState
 from services import (
+    DictionaryEntry,
     DiarizationError,
     MediaPreprocessError,
     PersistenceError,
@@ -41,9 +42,11 @@ from services import (
     extract_voice_embedding,
     load_library_state,
     load_voiceprint_state,
+    load_work_dictionary,
     preprocess_media,
     save_library_state,
     save_voiceprint_state,
+    save_work_dictionary,
     SpeakerIdentificationError,
     sync_work_dictionary,
     transcribe_wav,
@@ -167,6 +170,17 @@ def build_voiceprint_selection_label(state: AppState) -> str:
     return f"選択中サンプル: [{format_seconds(segment.start)}] {segment.edited_text[:50]}"
 
 
+def build_dictionary_rows(state: AppState):
+    work = get_selected_work(state)
+    if work is None:
+        return []
+    work_dictionary = load_work_dictionary(DATA_DIR, work.work_id, work.title)
+    return [
+        [entry.source, entry.target, "、".join(entry.aliases)]
+        for entry in work_dictionary.entries
+    ]
+
+
 def build_transcription_prompt(state: AppState, user_prompt: str) -> str:
     work = get_selected_work(state)
     prompt_parts = []
@@ -198,6 +212,7 @@ def render_all(state: AppState, message: str, kind: str = "info"):
         gr.update(value=work.title if work else ""),
         gr.update(visible=state.show_character_manager),
         gr.update(value="、".join(work.character_names) if work else ""),
+        build_dictionary_rows(state),
         build_episode_rows(state),
         gr.update(value=f"## {episode.title if episode else '話数編集'}"),
         episode.range_start if episode else "",
@@ -321,6 +336,7 @@ def toggle_character_manager(state_dict: dict):
         format_status_box(message, "info"),
         gr.update(visible=state.show_character_manager),
         gr.update(value="、".join(work.character_names) if work else ""),
+        build_dictionary_rows(state),
     ]
 
 
@@ -333,6 +349,33 @@ def save_character_candidates(raw_text: str, state_dict: dict):
     if not ok:
         return render_all(state, error, "error")
     return render_all(state, "キャラ名候補を保存しました", "success")
+
+
+def save_dictionary_entries(rows, state_dict: dict):
+    state = parse_state(state_dict)
+    work = get_selected_work(state)
+    if work is None:
+        return render_all(state, "作品を選択してください", "error")
+
+    normalized_rows = rows.values.tolist() if hasattr(rows, "values") else rows or []
+    entries: list[DictionaryEntry] = []
+    for row in normalized_rows:
+        source = str(row[0]).strip() if len(row) > 0 else ""
+        target = str(row[1]).strip() if len(row) > 1 else ""
+        aliases_raw = str(row[2]).strip() if len(row) > 2 else ""
+        if not source or not target:
+            continue
+        aliases = [
+            item.strip()
+            for item in aliases_raw.replace("、", ",").replace("\n", ",").split(",")
+            if item.strip()
+        ]
+        entries.append(DictionaryEntry(source=source, target=target, aliases=aliases))
+
+    work_dictionary = load_work_dictionary(DATA_DIR, work.work_id, work.title)
+    work_dictionary.entries = entries
+    save_work_dictionary(DATA_DIR, work_dictionary)
+    return render_all(state, "辞書を保存しました", "success")
 
 
 def add_episode(state_dict: dict):
@@ -843,6 +886,14 @@ with gr.Blocks(title="字幕ライブラリ", css=custom_css) as demo:
             with gr.Column(visible=False) as character_manager_area:
                 character_names_input = gr.Textbox(label="キャラ名候補", placeholder="例: ルフィ、ゾロ、ナミ")
                 save_character_names_button = gr.Button("候補を保存")
+                dictionary_table = gr.Dataframe(
+                    headers=["読み", "置換後", "別名候補"],
+                    datatype=["str", "str", "str"],
+                    interactive=True,
+                    value=[],
+                    wrap=True,
+                )
+                save_dictionary_button = gr.Button("辞書を保存", variant="secondary")
             episode_table = gr.Dataframe(
                 headers=["話数", "状態", "更新日"],
                 datatype=["str", "str", "str"],
@@ -964,6 +1015,7 @@ with gr.Blocks(title="字幕ライブラリ", css=custom_css) as demo:
         work_title_input,
         character_manager_area,
         character_names_input,
+        dictionary_table,
         episode_table,
         editor_title_markdown,
         start_input,
@@ -1014,10 +1066,11 @@ with gr.Blocks(title="字幕ライブラリ", css=custom_css) as demo:
     manage_characters_button.click(
         fn=toggle_character_manager,
         inputs=[app_state],
-        outputs=[app_state, status_box, character_manager_area, character_names_input],
+        outputs=[app_state, status_box, character_manager_area, character_names_input, dictionary_table],
         queue=False,
     )
     save_character_names_button.click(fn=save_character_candidates, inputs=[character_names_input, app_state], outputs=full_outputs, queue=False)
+    save_dictionary_button.click(fn=save_dictionary_entries, inputs=[dictionary_table, app_state], outputs=full_outputs, queue=False)
     add_episode_button.click(fn=add_episode, inputs=[app_state], outputs=full_outputs, queue=False)
     episode_table.select(fn=open_episode, inputs=[app_state], outputs=full_outputs, queue=False)
     back_to_detail_button.click(fn=back_to_work_detail, inputs=[app_state], outputs=full_outputs, queue=False)

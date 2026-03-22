@@ -43,9 +43,18 @@ def build_subtitle_rows(state: AppState) -> list[list[str]]:
     if episode is None:
         return []
     return [
-        [segment.id, f"[{format_seconds(segment.start)}]", segment.display_name, segment.edited_text]
+        [segment.id, f"[{format_seconds(segment.start)}]", _build_segment_speaker_label(segment), segment.edited_text]
         for segment in episode.subtitle_segments
     ]
+
+
+def _build_segment_speaker_label(segment) -> str:
+    label = segment.display_name
+    if segment.voiceprint_profile_id:
+        if segment.voiceprint_confidence < 0.75:
+            return f"MEDIUM | {label}"
+        return label
+    return f"UNKNOWN | {label}"
 
 
 def build_speaker_list_payloads(state: AppState) -> list[dict[str, Any]]:
