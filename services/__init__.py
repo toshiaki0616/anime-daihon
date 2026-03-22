@@ -18,7 +18,7 @@ from .persistence import (
     save_library_state,
     save_voiceprint_state,
 )
-from .preprocess import MediaPreprocessError, PreprocessResult, preprocess_media
+from .preprocess import MediaPreprocessError, PreprocessResult, extract_audio_clip, preprocess_media
 from .speaker_id import (
     SpeakerIdentificationError,
     VoiceprintAssignment,
@@ -64,6 +64,7 @@ __all__ = [
     "diarize_wav",
     "ensure_dictionary_storage",
     "ensure_voiceprint_storage",
+    "extract_audio_clip",
     "export_episode_csv",
     "export_episode_txt",
     "extract_voice_embedding",

@@ -52,6 +52,46 @@ def preprocess_media(
     )
 
 
+def extract_audio_clip(
+    file_path: str,
+    clip_start: float,
+    clip_end: float,
+    data_dir: str | Path,
+) -> str:
+    source = Path(file_path)
+    if not source.exists() or not source.is_file():
+        raise MediaPreprocessError("音声クリップの作成元ファイルが見つかりません")
+    if clip_end <= clip_start:
+        raise MediaPreprocessError("音声クリップの範囲が不正です")
+
+    ffmpeg_path = shutil.which("ffmpeg")
+    if not ffmpeg_path:
+        raise MediaPreprocessError("音声クリップの作成に失敗しました")
+
+    output_dir = Path(data_dir) / "clips"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"{source.stem}_clip_{uuid.uuid4().hex[:8]}.wav"
+    command = [
+        ffmpeg_path,
+        "-y",
+        "-ss",
+        f"{clip_start:.3f}",
+        "-to",
+        f"{clip_end:.3f}",
+        "-i",
+        str(source),
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-sample_fmt",
+        "s16",
+        str(output_path),
+    ]
+    _run_ffmpeg(command, "音声クリップの作成に失敗しました")
+    return str(output_path)
+
+
 def _ensure_wav(source: Path, output_dir: Path) -> Path:
     if source.suffix.lower() == ".wav":
         return source

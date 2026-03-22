@@ -37,6 +37,7 @@ from services import (
     diarize_wav,
     ensure_dictionary_storage,
     ensure_voiceprint_storage,
+    extract_audio_clip,
     export_episode_csv,
     export_episode_txt,
     extract_voice_embedding,
@@ -67,9 +68,6 @@ from ui.renderers import (
 )
 
 DATA_DIR = Path(__file__).parent / "data"
-VOICEPRINT_SAMPLE_TARGET_SECONDS = 3.0
-VOICEPRINT_SAMPLE_MIN_SECONDS = 1.0
-VOICEPRINT_SAMPLE_MAX_COUNT = 10
 
 
 def now_label() -> str:
@@ -115,9 +113,7 @@ def normalize_voiceprint_candidate_state(state: AppState) -> None:
     ]
     valid_ids = {candidate.candidate_id for candidate in state.voiceprint_candidates}
     if state.selected_voiceprint_candidate_id not in valid_ids:
-        state.selected_voiceprint_candidate_id = (
-            state.voiceprint_candidates[0].candidate_id if state.voiceprint_candidates else ""
-        )
+        state.selected_voiceprint_candidate_id = ""
 
 
 def _truncate_preview(text: str, limit: int = 48) -> str:
@@ -127,84 +123,22 @@ def _truncate_preview(text: str, limit: int = 48) -> str:
     return f"{cleaned[:limit - 1]}…"
 
 
-def _voiceprint_candidate_window(start: float, end: float) -> tuple[float, float]:
-    duration = max(0.0, end - start)
-    if duration <= VOICEPRINT_SAMPLE_TARGET_SECONDS:
-        return max(0.0, start), end
-    midpoint = start + (duration / 2.0)
-    half = VOICEPRINT_SAMPLE_TARGET_SECONDS / 2.0
-    return max(0.0, midpoint - half), midpoint + half
-
-
 def build_voiceprint_candidates_for_episode(state: AppState) -> list[VoiceprintCandidate]:
     episode = get_selected_episode(state)
     if episode is None or not episode.subtitle_segments:
         return []
 
-    grouped_runs: list[dict] = []
-    current_run: dict | None = None
-    for segment in episode.subtitle_segments:
-        duration = max(0.0, segment.end - segment.start)
-        if duration <= 0:
-            continue
-
-        if current_run is None:
-            current_run = {
-                "speaker_id": segment.speaker_id,
-                "source_segment_id": segment.id,
-                "start": segment.start,
-                "end": segment.end,
-                "texts": [segment.edited_text],
-            }
-            continue
-
-        gap = max(0.0, segment.start - current_run["end"])
-        if segment.speaker_id == current_run["speaker_id"] and gap <= 0.45:
-            current_run["end"] = segment.end
-            current_run["texts"].append(segment.edited_text)
-        else:
-            grouped_runs.append(current_run)
-            current_run = {
-                "speaker_id": segment.speaker_id,
-                "source_segment_id": segment.id,
-                "start": segment.start,
-                "end": segment.end,
-                "texts": [segment.edited_text],
-            }
-
-    if current_run is not None:
-        grouped_runs.append(current_run)
-
-    ranked_runs: list[tuple[tuple[float, float, float, str], dict]] = []
-    for run in grouped_runs:
-        duration = max(0.0, run["end"] - run["start"])
-        if duration < VOICEPRINT_SAMPLE_MIN_SECONDS:
-            continue
-        transcript_text = "".join(text.strip() for text in run["texts"] if text.strip())
-        if len(transcript_text) < 4:
-            continue
-        score = (
-            abs(duration - VOICEPRINT_SAMPLE_TARGET_SECONDS),
-            -min(duration, VOICEPRINT_SAMPLE_TARGET_SECONDS),
-            -len(transcript_text),
-            run["source_segment_id"],
-        )
-        ranked_runs.append((score, run))
-
-    ranked_runs.sort(key=lambda item: item[0])
-
     candidates: list[VoiceprintCandidate] = []
-    for index, (_score, run) in enumerate(ranked_runs[:VOICEPRINT_SAMPLE_MAX_COUNT], start=1):
-        clip_start, clip_end = _voiceprint_candidate_window(run["start"], run["end"])
+    for index, segment in enumerate(episode.subtitle_segments, start=1):
         candidates.append(
             VoiceprintCandidate(
                 candidate_id=f"vpc_{index:02d}",
                 episode_id=episode.episode_id,
-                source_segment_id=run["source_segment_id"],
-                speaker_id=run["speaker_id"],
-                clip_start=clip_start,
-                clip_end=clip_end,
-                transcript_text="".join(run["texts"]),
+                source_segment_id=segment.id,
+                speaker_id=segment.speaker_id,
+                clip_start=segment.start,
+                clip_end=segment.end,
+                transcript_text=segment.edited_text,
             )
         )
     return candidates
@@ -239,6 +173,29 @@ def find_selected_voiceprint_candidate(state: AppState) -> VoiceprintCandidate |
 def format_episode_seconds(episode, seconds: float) -> str:
     offset = parse_time_offset_seconds(episode.range_start) if episode is not None else 0.0
     return format_seconds(offset + seconds)
+
+
+def get_segment_source_range(episode, segment) -> tuple[str, float, float]:
+    if episode is None or segment is None:
+        return "", 0.0, 0.0
+    if episode.wav_path and Path(episode.wav_path).exists():
+        return episode.wav_path, segment.start, segment.end
+    offset = parse_time_offset_seconds(episode.range_start)
+    source_path = episode.file_path or episode.wav_path
+    return source_path, offset + segment.start, offset + segment.end
+
+
+def build_selected_segment_audio_update(episode, segment):
+    if episode is None or segment is None:
+        return gr.update(value=None, visible=False)
+    source_path, clip_start, clip_end = get_segment_source_range(episode, segment)
+    if not source_path or clip_end <= clip_start:
+        return gr.update(value=None, visible=False)
+    try:
+        clip_path = extract_audio_clip(source_path, clip_start, clip_end, DATA_DIR)
+    except MediaPreprocessError:
+        return gr.update(value=None, visible=False)
+    return gr.update(value=clip_path, visible=True)
 
 
 def sorted_episodes_for_selected_work(state: AppState):
@@ -385,6 +342,7 @@ def render_all(state: AppState, message: str, kind: str = "info"):
         state.selected_subtitle_segment_id,
         gr.update(value="話者欄をクリックして変更するセリフを選択してください"),
         gr.update(value=""),
+        gr.update(value=None, visible=False),
         gr.update(choices=build_episode_speaker_choices(state), value=None),
         gr.update(value=episode.speaker_diagnostics if episode and episode.speaker_diagnostics else "話者分離診断: まだありません。"),
         gr.update(value=build_voiceprint_selection_label(state)),
@@ -837,7 +795,7 @@ def select_subtitle_segment(rows, state_dict: dict, evt: gr.SelectData):
     speaker_choices = build_episode_speaker_choices(state)
     if row_index is None or row_index >= len(normalized_rows):
         state.selected_subtitle_segment_id = ""
-        return "", gr.update(value="話者欄をクリックして変更するセリフを選択してください"), gr.update(value=""), gr.update(choices=speaker_choices, value=None)
+        return "", gr.update(value="話者欄をクリックして変更するセリフを選択してください"), gr.update(value=""), gr.update(value=None, visible=False), gr.update(choices=speaker_choices, value=None)
 
     row = normalized_rows[row_index]
     segment_id = str(row[0]) if row else ""
@@ -847,15 +805,18 @@ def select_subtitle_segment(rows, state_dict: dict, evt: gr.SelectData):
     preview = str(row[4]) if len(row) > 4 else ""
     episode = get_selected_episode(state)
     current_speaker_id = None
+    audio_update = gr.update(value=None, visible=False)
     if episode is not None:
         segment = next((item for item in episode.subtitle_segments if item.id == segment_id), None)
         if segment is not None:
             current_speaker_id = segment.speaker_id
             state.selected_subtitle_segment_id = segment.id
+            audio_update = build_selected_segment_audio_update(episode, segment)
     return (
         segment_id,
         gr.update(value=f"選択中: {start_label} / {duration_label} / {speaker_name} / {preview[:40]}"),
         gr.update(value=speaker_name),
+        audio_update,
         gr.update(choices=speaker_choices, value=current_speaker_id),
     )
 
@@ -900,23 +861,21 @@ def register_voiceprint(candidate_id: str | None, character_name: str | None, st
     state = parse_state(state_dict)
     work = get_selected_work(state)
     episode = get_selected_episode(state)
-    normalize_voiceprint_candidate_state(state)
-    state.selected_voiceprint_candidate_id = (candidate_id or state.selected_voiceprint_candidate_id).strip()
     target_name = (character_name or "").strip()
 
     if work is None or episode is None:
         return render_all(state, "話数を選択してください", "error")
-    selected = find_selected_voiceprint_candidate(state)
-    if selected is None:
-        return render_all(state, "先に声紋サンプルを作成して選択してください", "error")
+    target_segment_id = (state.selected_subtitle_segment_id or "").strip()
+    if not target_segment_id:
+        return render_all(state, "先にセリフをクリックして選択してください", "error")
     if not target_name:
         return render_all(state, "登録先のキャラ名を選択してください", "error")
 
-    segment = next((item for item in episode.subtitle_segments if item.id == selected.source_segment_id), None)
+    segment = next((item for item in episode.subtitle_segments if item.id == target_segment_id), None)
     if segment is None:
-        return render_all(state, "選択した声紋サンプルの元セリフが見つかりません", "error")
-    state.selected_subtitle_segment_id = selected.source_segment_id
-    state.selected_speaker_id = selected.speaker_id
+        return render_all(state, "選択したセリフが見つかりません", "error")
+    state.selected_subtitle_segment_id = segment.id
+    state.selected_speaker_id = segment.speaker_id
     state.selected_voiceprint_character_name = target_name
 
     if target_name not in work.character_names:
@@ -924,26 +883,22 @@ def register_voiceprint(candidate_id: str | None, character_name: str | None, st
         work.character_names.sort()
         sync_work_dictionary(DATA_DIR, work.work_id, work.title, work.character_names)
 
-    source_wav_path = episode.wav_path or episode.file_path
+    source_wav_path, clip_start, clip_end = get_segment_source_range(episode, segment)
     if not source_wav_path:
         return render_all(state, "声紋登録に使う音声パスが見つかりません", "error")
 
     ensure_voiceprint_storage(DATA_DIR, work.work_id)
     try:
         profiles, samples = load_voiceprint_state(DATA_DIR, work.work_id)
-        embedding = extract_voice_embedding(
-            source_wav_path,
-            selected.clip_start,
-            selected.clip_end,
-        )
+        embedding = extract_voice_embedding(source_wav_path, clip_start, clip_end)
         sample = build_voiceprint_sample(
             episode_id=episode.episode_id,
-            speaker_id=selected.speaker_id,
+            speaker_id=segment.speaker_id,
             character_name=target_name,
             source_wav_path=source_wav_path,
-            clip_start=selected.clip_start,
-            clip_end=selected.clip_end,
-            transcript_text=selected.transcript_text or segment.edited_text,
+            clip_start=clip_start,
+            clip_end=clip_end,
+            transcript_text=segment.edited_text,
             embedding=embedding,
         )
         profiles, samples, profile = upsert_voiceprint_profile(
@@ -959,7 +914,7 @@ def register_voiceprint(candidate_id: str | None, character_name: str | None, st
     except PersistenceError as exc:
         return render_all(state, exc.user_message, "error")
 
-    state = rename_speaker(state, selected.speaker_id, target_name)
+    state = rename_speaker(state, segment.speaker_id, target_name)
     ok, error = persist_state_or_error(state)
     if not ok:
         return render_all(state, error, "error")
@@ -1005,11 +960,11 @@ def preview_partial_rerun(segment_id: str | None, state_dict: dict, progress=gr.
     if segment is None:
         return render_all(state, "再読み込みするセリフを選択してください", "error")
 
-    source_path = episode.file_path or episode.wav_path
+    source_path, source_range_start, source_range_end = get_segment_source_range(episode, segment)
     if not source_path or not Path(source_path).exists():
         return render_all(state, "再読み込み用の元ファイルが見つかりませんでした", "error")
 
-    range_start, range_end = build_partial_rerun_range(segment.start, segment.end)
+    range_start, range_end = build_partial_rerun_range(source_range_start, source_range_end)
     prompt_text = build_transcription_prompt(state, episode.initial_prompt)
 
     progress(0.1, desc="選択区間を切り出しています...")
@@ -1152,6 +1107,12 @@ with gr.Blocks(title="字幕ライブラリ", css=custom_css) as demo:
                     whisper_model_input = gr.Dropdown(label="文字起こしエンジン", choices=MODEL_OPTIONS, value=DEFAULT_MODEL_NAME)
                     initial_prompt_input = gr.Textbox(label="補助プロンプト", lines=4, placeholder="例: 固有名詞候補、言い間違えやすい単語、キャラ名")
                     generate_button = gr.Button("字幕を作成", variant="primary")
+            with gr.Row():
+                save_subtitles_button = gr.Button("字幕編集を保存", variant="secondary")
+                save_episode_button = gr.Button("保存", variant="primary")
+                export_txt_button = gr.Button("テキストを書き出す", variant="secondary")
+                export_csv_button = gr.Button("CSVを書き出す", variant="secondary")
+                open_speakers_button = gr.Button("☰ 話者一覧", variant="secondary")
             subtitle_table = gr.Dataframe(
                 headers=["segment_id", "開始", "長さ", "話者", "セリフ"],
                 datatype=["str", "str", "str", "str", "str"],
@@ -1164,6 +1125,7 @@ with gr.Blocks(title="字幕ライブラリ", css=custom_css) as demo:
             with gr.Row():
                 selected_subtitle_label = gr.Markdown("話者欄をクリックして変更するセリフを選択してください")
                 selected_subtitle_current_speaker = gr.Textbox(label="現在の話者", interactive=False, value="")
+                selected_subtitle_audio = gr.Audio(label="選択セリフ音声", interactive=False, visible=False, type="filepath")
             with gr.Row():
                 speaker_change_target = gr.Dropdown(
                     label="変更先の話者",
@@ -1172,12 +1134,13 @@ with gr.Blocks(title="字幕ライブラリ", css=custom_css) as demo:
                 )
                 apply_speaker_change_button = gr.Button("選択中のセリフの話者を変更", variant="secondary")
             speaker_diagnostics_box = gr.Textbox(label="話者分離診断", lines=5, interactive=False, value="話者分離診断: まだありません。")
-            voiceprint_selection_label = gr.Markdown("声紋に使うセリフを表の行から選択してください。")
-            create_voiceprint_samples_button = gr.Button("声紋サンプルを作成", variant="secondary")
+            voiceprint_selection_label = gr.Markdown("選択中のセリフを声紋登録できます。", visible=False)
+            create_voiceprint_samples_button = gr.Button("声紋サンプルを作成", variant="secondary", visible=False)
             voiceprint_sample_input = gr.Dropdown(
                 label="声紋サンプル候補",
                 choices=[],
                 value=None,
+                visible=False,
             )
             with gr.Row():
                 voiceprint_character_input = gr.Dropdown(
@@ -1186,22 +1149,16 @@ with gr.Blocks(title="字幕ライブラリ", css=custom_css) as demo:
                     value=None,
                     allow_custom_value=True,
                 )
-                register_voiceprint_button = gr.Button("声紋を登録", variant="secondary")
+                register_voiceprint_button = gr.Button("選択セリフを声紋登録", variant="secondary")
+                rerun_selected_button = gr.Button("選択セリフを再読み込み", variant="secondary")
             voiceprint_summary_box = gr.Textbox(label="声紋登録状況", lines=4, interactive=False, value="声紋登録: まだありません。")
             rerun_candidate_label = gr.Markdown("選択した時刻を再読み込みすると候補がここに表示されます。")
             with gr.Row():
                 rerun_candidate_range = gr.Textbox(label="再読み込み範囲", interactive=False, value="")
-                rerun_selected_button = gr.Button("選択した時刻を再読み込み", variant="secondary")
             rerun_candidate_textbox = gr.Textbox(label="再読み込み候補", lines=4, interactive=False, value="")
             with gr.Row():
                 apply_rerun_candidate_button = gr.Button("候補を反映", variant="secondary")
                 clear_rerun_candidate_button = gr.Button("候補を破棄", variant="secondary")
-            with gr.Row():
-                save_subtitles_button = gr.Button("字幕編集を保存", variant="secondary")
-                save_episode_button = gr.Button("保存", variant="primary")
-                export_txt_button = gr.Button("テキストを書き出す", variant="secondary")
-                export_csv_button = gr.Button("CSVを書き出す", variant="secondary")
-                open_speakers_button = gr.Button("☰ 話者一覧", variant="secondary")
             with gr.Row(elem_classes=["export-files"]):
                 txt_export_file = gr.File(label="TXT書き出し", interactive=False, visible=False)
                 csv_export_file = gr.File(label="CSV書き出し", interactive=False, visible=False)
@@ -1269,6 +1226,7 @@ with gr.Blocks(title="字幕ライブラリ", css=custom_css) as demo:
         selected_subtitle_segment,
         selected_subtitle_label,
         selected_subtitle_current_speaker,
+        selected_subtitle_audio,
         speaker_change_target,
         speaker_diagnostics_box,
         voiceprint_selection_label,
@@ -1327,7 +1285,7 @@ with gr.Blocks(title="字幕ライブラリ", css=custom_css) as demo:
     subtitle_table.select(
         fn=select_subtitle_segment,
         inputs=[subtitle_table, app_state],
-        outputs=[selected_subtitle_segment, selected_subtitle_label, selected_subtitle_current_speaker, speaker_change_target],
+        outputs=[selected_subtitle_segment, selected_subtitle_label, selected_subtitle_current_speaker, selected_subtitle_audio, speaker_change_target],
         queue=False,
     )
     apply_speaker_change_button.click(
