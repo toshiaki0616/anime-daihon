@@ -161,6 +161,30 @@ def _overlap_duration(left_start: float, left_end: float, right_start: float, ri
     return max(0.0, min(left_end, right_end) - max(left_start, right_start))
 
 
+def _segment_midpoint(start: float, end: float) -> float:
+    return start + ((end - start) / 2.0)
+
+
+def _nearest_speaker_for_segment(item: TranscriptionSegment, diarization_segments: list[DiarizationSegment]) -> str | None:
+    if not diarization_segments:
+        return None
+
+    midpoint = _segment_midpoint(item.start, item.end)
+    nearest: tuple[float, float, str] | None = None
+    for diarization in diarization_segments:
+        if diarization.start <= midpoint <= diarization.end:
+            distance = 0.0
+        else:
+            distance = min(abs(midpoint - diarization.start), abs(midpoint - diarization.end))
+        candidate = (distance, diarization.start, diarization.speaker)
+        if nearest is None or candidate < nearest:
+            nearest = candidate
+
+    if nearest is None or nearest[0] > 1.5:
+        return None
+    return nearest[2]
+
+
 def _assign_speaker_mapping(
     transcription_segments: list[TranscriptionSegment],
     diarization_segments: list[DiarizationSegment],
@@ -181,6 +205,7 @@ def _assign_speaker_mapping(
                 max(item.start, diarization.start),
             )
 
+        dominant_raw = None
         if overlap_by_speaker:
             dominant_raw = min(
                 overlap_by_speaker,
@@ -190,6 +215,10 @@ def _assign_speaker_mapping(
                     speaker,
                 ),
             )
+        else:
+            dominant_raw = _nearest_speaker_for_segment(item, diarization_segments)
+
+        if dominant_raw is not None:
             speaker_first_seen.setdefault(dominant_raw, item.start)
             assignments.append({"raw_speaker": dominant_raw})
         else:
@@ -263,6 +292,37 @@ def _rebuild_speakers(
         )
     speakers.sort(key=lambda item: item.raw_label)
     return speakers
+
+
+def _build_speaker_diagnostics(
+    transcription_segments: list[TranscriptionSegment],
+    diarization_segments: list[DiarizationSegment],
+    subtitle_segments: list[SubtitleSegment],
+) -> str:
+    if not transcription_segments:
+        return "話者分離診断: まだ字幕がありません。"
+
+    lines = [f"話者分離診断: 字幕候補 {len(transcription_segments)}件"]
+    if not diarization_segments:
+        lines.append("話者候補は検出できず、話者Aへフォールバックしました。")
+    else:
+        durations: dict[str, float] = {}
+        for item in diarization_segments:
+            durations[item.speaker] = durations.get(item.speaker, 0.0) + max(0.0, item.end - item.start)
+        ordered = sorted(durations.items(), key=lambda pair: (-pair[1], pair[0]))
+        lines.append(f"話者候補: {len(ordered)}人")
+        lines.extend([f"- {speaker}: {duration:.1f}秒" for speaker, duration in ordered[:5]])
+
+    assigned_counts: dict[str, int] = {}
+    for segment in subtitle_segments:
+        assigned_counts[segment.raw_label] = assigned_counts.get(segment.raw_label, 0) + 1
+    if assigned_counts:
+        summary = ' / '.join(f"{label}:{count}件" for label, count in sorted(assigned_counts.items()))
+        lines.append(f"字幕への割り当て: {summary}")
+        if len(assigned_counts) == 1 and diarization_segments:
+            lines.append("複数話者の可能性はありますが、割り当ては1人に寄っています。必要なら手動で話者を移動してください。")
+
+    return "`n".join(lines)
 
 
 def _touch_work_for_episode(state: AppState, episode: Episode) -> None:
@@ -452,6 +512,7 @@ def apply_transcription_segments(
     episode.enhance_audio = enhance_audio
     episode.subtitle_segments = subtitle_segments
     episode.speaker_label_map = speaker_label_map if subtitle_segments else {}
+    episode.speaker_diagnostics = _build_speaker_diagnostics(transcription_segments, diarization_segments, subtitle_segments)
     episode.merge_map = {}
     episode.status = "作業中" if subtitle_segments else episode.status
     sync_episode(episode)
@@ -529,6 +590,60 @@ def merge_speakers(state: AppState, source_speaker_id: str, target_speaker_id: s
     return next_state
 
 
+def move_segment_to_speaker(state: AppState, segment_id: str, target_speaker_id: str) -> AppState:
+    next_state = deepcopy(state)
+    episode = get_selected_episode(next_state)
+    if episode is None or not segment_id or not target_speaker_id:
+        return next_state
+
+    target_exists = any(speaker.speaker_id == target_speaker_id for speaker in episode.speakers)
+    if not target_exists:
+        return next_state
+
+    target_segment = next((segment for segment in episode.subtitle_segments if segment.id == segment_id), None)
+    if target_segment is None:
+        return next_state
+
+    target_segment.speaker_id = target_speaker_id
+    sync_episode(episode)
+    _touch_work_for_episode(next_state, episode)
+    return next_state
+
+
+def update_segment_text(state: AppState, segment_id: str, new_text: str) -> AppState:
+    next_state = deepcopy(state)
+    episode = get_selected_episode(next_state)
+    if episode is None or not segment_id:
+        return next_state
+
+    target_segment = next((segment for segment in episode.subtitle_segments if segment.id == segment_id), None)
+    if target_segment is None:
+        return next_state
+
+    target_segment.edited_text = new_text.strip() if new_text.strip() else target_segment.edited_text
+    sync_episode(episode)
+    _touch_work_for_episode(next_state, episode)
+    return next_state
+
+
+def delete_speaker_profile(state: AppState, speaker_id: str) -> AppState:
+    next_state = deepcopy(state)
+    episode = get_selected_episode(next_state)
+    if episode is None or not speaker_id:
+        return next_state
+
+    target = next((speaker for speaker in episode.speakers if speaker.speaker_id == speaker_id), None)
+    if target is None or target.utterance_count > 0:
+        return next_state
+
+    episode.speakers = [speaker for speaker in episode.speakers if speaker.speaker_id != speaker_id]
+    if next_state.selected_speaker_id == speaker_id:
+        next_state.selected_speaker_id = ""
+    sync_episode(episode)
+    _touch_work_for_episode(next_state, episode)
+    return next_state
+
+
 def swap_speakers(state: AppState, left_speaker_id: str, right_speaker_id: str) -> AppState:
     next_state = deepcopy(state)
     episode = get_selected_episode(next_state)
@@ -552,3 +667,4 @@ def swap_speakers(state: AppState, left_speaker_id: str, right_speaker_id: str) 
     sync_episode(episode)
     _touch_work_for_episode(next_state, episode)
     return next_state
+

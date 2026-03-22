@@ -20,9 +20,18 @@ class TranscriptionSegment:
 
 
 DEFAULT_MODEL_NAME = getenv("WHISPER_MODEL", "base")
+MODEL_OPTIONS = [
+    ("通常精度 (base)", "base"),
+    ("高精度 (small)", "small"),
+    ("最高精度 (medium)", "medium"),
+]
 
 
-def transcribe_wav(wav_path: str, model_name: str = DEFAULT_MODEL_NAME) -> list[TranscriptionSegment]:
+def transcribe_wav(
+    wav_path: str,
+    model_name: str = DEFAULT_MODEL_NAME,
+    initial_prompt: str = "",
+) -> list[TranscriptionSegment]:
     source = Path(wav_path)
     if not source.exists() or not source.is_file():
         raise TranscriptionError("字幕の作成に失敗しました")
@@ -34,7 +43,17 @@ def transcribe_wav(wav_path: str, model_name: str = DEFAULT_MODEL_NAME) -> list[
 
     try:
         model = whisper.load_model(model_name)
-        result: dict[str, Any] = model.transcribe(str(source), verbose=False, language="ja")
+        decode_options: dict[str, Any] = {
+            "verbose": False,
+            "language": "ja",
+            "temperature": 0,
+            "beam_size": 5,
+            "best_of": 5,
+            "condition_on_previous_text": True,
+        }
+        if initial_prompt.strip():
+            decode_options["initial_prompt"] = initial_prompt.strip()
+        result: dict[str, Any] = model.transcribe(str(source), **decode_options)
     except Exception as exc:  # noqa: BLE001
         raise TranscriptionError("字幕の作成に失敗しました") from exc
 

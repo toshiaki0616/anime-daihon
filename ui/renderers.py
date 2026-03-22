@@ -88,6 +88,10 @@ def build_speaker_detail_payload(state: AppState) -> dict[str, Any]:
         "utterances_html": "<div class='speaker-empty'>左の話者を選ぶと、ここにセリフ一覧と編集内容が表示されます。</div>",
         "merge_choices": [],
         "swap_choices": [],
+        "move_segment_choices": [],
+        "move_target_choices": [],
+        "utterance_choices": [],
+        "can_delete": False,
     }
     if episode is None or not state.selected_speaker_id:
         return empty_payload
@@ -103,6 +107,11 @@ def build_speaker_detail_payload(state: AppState) -> dict[str, Any]:
     ]
     sample_lines = "".join(lines) if lines else "<li class='speaker-empty'>まだこの話者にセリフはありません。</li>"
     speaker_choices = [(item.display_name or item.raw_label, item.speaker_id) for item in episode.speakers]
+    move_segment_choices = [
+        (f"[{format_seconds(segment.start)}] {segment.edited_text[:50]}", segment.id)
+        for segment in episode.subtitle_segments
+        if segment.speaker_id == speaker.speaker_id
+    ]
     visible_name = speaker.display_name if speaker.display_name != speaker.raw_label else ""
     return {
         "title": f"### {speaker.raw_label}（{speaker.utterance_count}件）",
@@ -112,6 +121,10 @@ def build_speaker_detail_payload(state: AppState) -> dict[str, Any]:
         "utterances_html": f"<div class='speaker-sample-list'><div class='speaker-sample-caption'>セリフ一覧</div><ul>{sample_lines}</ul></div>",
         "merge_choices": [choice for choice in speaker_choices if choice[1] != speaker.speaker_id],
         "swap_choices": [choice for choice in speaker_choices if choice[1] != speaker.speaker_id],
+        "move_segment_choices": move_segment_choices,
+        "move_target_choices": [choice for choice in speaker_choices if choice[1] != speaker.speaker_id],
+        "utterance_choices": move_segment_choices,
+        "can_delete": speaker.utterance_count == 0,
     }
 
 

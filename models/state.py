@@ -50,6 +50,9 @@ class Episode:
     range_start: str = ""
     range_end: str = ""
     enhance_audio: bool = False
+    whisper_model: str = "base"
+    initial_prompt: str = ""
+    speaker_diagnostics: str = ""
     subtitle_segments: list[SubtitleSegment] = field(default_factory=list)
     speakers: list[SpeakerProfile] = field(default_factory=list)
     merge_map: dict[str, str] = field(default_factory=dict)
@@ -66,6 +69,9 @@ class Episode:
             "range_start": self.range_start,
             "range_end": self.range_end,
             "enhance_audio": self.enhance_audio,
+            "whisper_model": self.whisper_model,
+            "initial_prompt": self.initial_prompt,
+            "speaker_diagnostics": self.speaker_diagnostics,
             "subtitle_segments": [segment.to_dict() for segment in self.subtitle_segments],
             "speakers": [speaker.to_dict() for speaker in self.speakers],
             "merge_map": dict(self.merge_map),
@@ -84,6 +90,9 @@ class Episode:
             range_start=data.get("range_start", ""),
             range_end=data.get("range_end", ""),
             enhance_audio=data.get("enhance_audio", False),
+            whisper_model=data.get("whisper_model", "base"),
+            initial_prompt=data.get("initial_prompt", ""),
+            speaker_diagnostics=data.get("speaker_diagnostics", ""),
             subtitle_segments=[
                 SubtitleSegment.from_dict(segment)
                 for segment in data.get("subtitle_segments", [])
@@ -136,6 +145,11 @@ class AppState:
     selected_episode_id: str = ""
     selected_speaker_id: str = ""
     show_character_manager: bool = False
+    selected_subtitle_segment_id: str = ""
+    selected_subtitle_preview: str = ""
+    rerun_candidate_text: str = ""
+    rerun_candidate_label: str = ""
+    rerun_candidate_range: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -145,6 +159,11 @@ class AppState:
             "selected_episode_id": self.selected_episode_id,
             "selected_speaker_id": self.selected_speaker_id,
             "show_character_manager": self.show_character_manager,
+            "selected_subtitle_segment_id": self.selected_subtitle_segment_id,
+            "selected_subtitle_preview": self.selected_subtitle_preview,
+            "rerun_candidate_text": self.rerun_candidate_text,
+            "rerun_candidate_label": self.rerun_candidate_label,
+            "rerun_candidate_range": self.rerun_candidate_range,
         }
 
     @classmethod
@@ -156,4 +175,9 @@ class AppState:
             selected_episode_id=data.get("selected_episode_id", ""),
             selected_speaker_id=data.get("selected_speaker_id", ""),
             show_character_manager=data.get("show_character_manager", False),
+            selected_subtitle_segment_id=data.get("selected_subtitle_segment_id", ""),
+            selected_subtitle_preview=data.get("selected_subtitle_preview", ""),
+            rerun_candidate_text=data.get("rerun_candidate_text", ""),
+            rerun_candidate_label=data.get("rerun_candidate_label", ""),
+            rerun_candidate_range=data.get("rerun_candidate_range", ""),
         )
