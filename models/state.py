@@ -9,13 +9,13 @@ class SubtitleSegment:
     id: str
     start: float
     end: float
-    source_start: float = 0.0
-    source_end: float = 0.0
     speaker_id: str
     raw_label: str
     display_name: str
     original_text: str
     edited_text: str
+    source_start: float = 0.0
+    source_end: float = 0.0
     voiceprint_profile_id: str = ""
     voiceprint_character_name: str = ""
     voiceprint_confidence: float = 0.0
