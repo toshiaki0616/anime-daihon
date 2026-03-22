@@ -30,12 +30,15 @@ from services import (
     MediaPreprocessError,
     PersistenceError,
     TranscriptionError,
+    apply_dictionary,
     diarize_wav,
+    ensure_dictionary_storage,
     export_episode_csv,
     export_episode_txt,
     load_library_state,
     preprocess_media,
     save_library_state,
+    sync_work_dictionary,
     transcribe_wav,
     DEFAULT_MODEL_NAME,
     MODEL_OPTIONS,
@@ -60,6 +63,7 @@ def now_label() -> str:
 
 def load_initial_state() -> tuple[AppState, str, str]:
     try:
+        ensure_dictionary_storage(DATA_DIR)
         state = load_library_state(DATA_DIR)
     except PersistenceError:
         return build_mock_app_state(), "読み込みに失敗しました", "error"
@@ -68,6 +72,7 @@ def load_initial_state() -> tuple[AppState, str, str]:
         return build_mock_app_state(), "モックライブラリを読み込みました", "info"
 
     for work in state.works:
+        sync_work_dictionary(DATA_DIR, work.work_id, work.title, work.character_names)
         for episode in work.episodes:
             sync_episode(episode)
     return state, "保存済みライブラリを読み込みました", "info"
@@ -206,11 +211,15 @@ def persist_state_or_error(state: AppState) -> tuple[bool, str]:
 
 def add_work(state_dict: dict):
     state = create_work(parse_state(state_dict))
+    work = get_selected_work(state)
+    if work is not None:
+        sync_work_dictionary(DATA_DIR, work.work_id, work.title, work.character_names)
     return render_all(state, "新しい作品を追加しました", "success")
 
 
 def reload_library(state_dict: dict | None = None):
     try:
+        ensure_dictionary_storage(DATA_DIR)
         state = load_library_state(DATA_DIR)
     except PersistenceError:
         return render_all(parse_state(state_dict), "読み込みに失敗しました", "error")
@@ -218,6 +227,7 @@ def reload_library(state_dict: dict | None = None):
         state = build_mock_app_state()
         return render_all(state, "保存済みデータがないためモックライブラリを表示しています", "info")
     for work in state.works:
+        sync_work_dictionary(DATA_DIR, work.work_id, work.title, work.character_names)
         for episode in work.episodes:
             sync_episode(episode)
     return render_all(state, "保存済みライブラリを再読込しました", "success")
@@ -242,6 +252,9 @@ def back_to_work_list(state_dict: dict):
 
 def save_work_title(new_title: str, state_dict: dict):
     state = update_work_title(parse_state(state_dict), new_title)
+    work = get_selected_work(state)
+    if work is not None:
+        sync_work_dictionary(DATA_DIR, work.work_id, work.title, work.character_names)
     ok, error = persist_state_or_error(state)
     if not ok:
         return render_all(state, error, "error")
@@ -263,6 +276,9 @@ def toggle_character_manager(state_dict: dict):
 
 def save_character_candidates(raw_text: str, state_dict: dict):
     state = update_character_names(parse_state(state_dict), raw_text)
+    work = get_selected_work(state)
+    if work is not None:
+        sync_work_dictionary(DATA_DIR, work.work_id, work.title, work.character_names)
     ok, error = persist_state_or_error(state)
     if not ok:
         return render_all(state, error, "error")
@@ -294,6 +310,7 @@ def back_to_work_detail(state_dict: dict):
 def generate_subtitles(file_path: str | None, start_time: str, end_time: str, enhance_audio: bool, whisper_model: str, initial_prompt: str, state_dict: dict, progress=gr.Progress(track_tqdm=False)):
     state = parse_state(state_dict)
     episode = get_selected_episode(state)
+    work = get_selected_work(state)
     if episode is None:
         return render_all(state, "話数を選択してください", "error")
     if not file_path:
@@ -307,6 +324,9 @@ def generate_subtitles(file_path: str | None, start_time: str, end_time: str, en
     episode.whisper_model = normalize_model_selection(whisper_model)
     episode.initial_prompt = initial_prompt.strip()
     prompt_text = build_transcription_prompt(state, initial_prompt)
+    work_dictionary = None
+    if work is not None:
+        work_dictionary = sync_work_dictionary(DATA_DIR, work.work_id, work.title, work.character_names)
 
     try:
         preprocess_result = preprocess_media(
@@ -343,6 +363,7 @@ def generate_subtitles(file_path: str | None, start_time: str, end_time: str, en
         enhance_audio=enhance_audio,
         transcription_segments=transcription_segments,
         diarization_segments=diarization_segments,
+        text_postprocessor=lambda text: apply_dictionary(text, work_dictionary),
     )
     progress(1.0, desc="字幕を作成しました")
     if diarization_failed:

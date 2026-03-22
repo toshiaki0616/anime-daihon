@@ -1,4 +1,13 @@
-﻿from .diarization import DiarizationError, DiarizationSegment, diarize_wav
+from .dictionary import (
+    DictionaryEntry,
+    WorkDictionary,
+    apply_dictionary,
+    ensure_dictionary_storage,
+    load_work_dictionary,
+    save_work_dictionary,
+    sync_work_dictionary,
+)
+from .diarization import DiarizationError, DiarizationSegment, diarize_wav
 from .persistence import (
     PersistenceError,
     export_episode_csv,
@@ -17,6 +26,7 @@ from .transcription import (
 )
 
 __all__ = [
+    "DictionaryEntry",
     "DiarizationError",
     "DiarizationSegment",
     "MediaPreprocessError",
@@ -26,12 +36,18 @@ __all__ = [
     "MODEL_OPTIONS",
     "TranscriptionError",
     "TranscriptionSegment",
+    "WorkDictionary",
+    "apply_dictionary",
+    "ensure_dictionary_storage",
+    "load_library_state",
+    "load_work_dictionary",
     "normalize_model_selection",
+    "save_library_state",
+    "save_work_dictionary",
+    "sync_work_dictionary",
     "diarize_wav",
     "export_episode_csv",
     "export_episode_txt",
-    "load_library_state",
     "preprocess_media",
-    "save_library_state",
     "transcribe_wav",
 ]

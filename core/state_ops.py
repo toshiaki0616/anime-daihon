@@ -3,7 +3,7 @@
 from copy import deepcopy
 from datetime import datetime
 from string import ascii_uppercase
-from typing import Iterable
+from typing import Callable, Iterable
 
 from models.state import AppState, Episode, SpeakerProfile, SubtitleSegment, Work
 from services.diarization import DiarizationSegment
@@ -252,6 +252,7 @@ def _preserve_edited_text(
     original_text: str,
     start: float,
     end: float,
+    default_edited_text: str,
 ) -> str:
     if index < len(previous_segments):
         previous = previous_segments[index]
@@ -263,7 +264,7 @@ def _preserve_edited_text(
     for previous in previous_segments:
         if previous.original_text.strip() == original_text.strip():
             return previous.edited_text
-    return original_text
+    return default_edited_text
 
 
 def _rebuild_speakers(
@@ -472,6 +473,7 @@ def apply_transcription_segments(
     enhance_audio: bool,
     transcription_segments: list[TranscriptionSegment],
     diarization_segments: list[DiarizationSegment] | None = None,
+    text_postprocessor: Callable[[str], str] | None = None,
 ) -> AppState:
     next_state = deepcopy(state)
     episode = get_selected_episode(next_state)
@@ -487,6 +489,7 @@ def apply_transcription_segments(
         text = item.text.strip()
         if not text:
             continue
+        edited_text = text_postprocessor(text) if text_postprocessor else text
         assignment = assignments[index] if index < len(assignments) else {
             "speaker_id": FALLBACK_SPEAKER_ID,
             "raw_label": FALLBACK_LABEL,
@@ -501,7 +504,14 @@ def apply_transcription_segments(
                 raw_label=assignment["raw_label"],
                 display_name=assignment["display_name"],
                 original_text=text,
-                edited_text=_preserve_edited_text(previous_segments, index, text, item.start, item.end),
+                edited_text=_preserve_edited_text(
+                    previous_segments,
+                    index,
+                    text,
+                    item.start,
+                    item.end,
+                    edited_text,
+                ),
             )
         )
 
