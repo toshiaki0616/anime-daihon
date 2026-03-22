@@ -312,6 +312,14 @@ def build_subtitle_segment_choices(state: AppState):
     ]
 
 
+def normalize_dropdown_value(value: str | None, choices) -> str | None:
+    candidate = (value or "").strip()
+    valid_values = {choice[1] for choice in choices}
+    if candidate in valid_values:
+        return candidate
+    return None
+
+
 def build_voiceprint_summary(state: AppState) -> str:
     work = get_selected_work(state)
     if work is None:
@@ -386,6 +394,7 @@ def render_all(state: AppState, message: str, kind: str = "info"):
         and state.selected_voiceprint_character_name not in work.character_names
     ):
         state.selected_voiceprint_character_name = ""
+    subtitle_segment_choices = build_subtitle_segment_choices(state)
     speaker_detail = build_speaker_detail_payload(state)
 
     outputs = [
@@ -411,7 +420,10 @@ def render_all(state: AppState, message: str, kind: str = "info"):
         build_subtitle_rows(state),
         state.selected_subtitle_segment_id,
         gr.update(value=build_selected_subtitle_label()),
-        gr.update(choices=build_subtitle_segment_choices(state), value=state.selected_subtitle_segment_id or None),
+        gr.update(
+            choices=subtitle_segment_choices,
+            value=normalize_dropdown_value(state.selected_subtitle_segment_id, subtitle_segment_choices),
+        ),
         gr.update(value=""),
         gr.update(value=None, visible=False),
         gr.update(choices=build_episode_speaker_choices(state), value=None),
@@ -887,7 +899,7 @@ def select_subtitle_segment(rows, state_dict: dict, evt: gr.SelectData):
     return (
         segment_id,
         gr.update(value=build_selected_subtitle_label(start_label, duration_label, speaker_name, preview[:60])),
-        gr.update(choices=segment_choices, value=segment_id),
+        gr.update(choices=segment_choices, value=normalize_dropdown_value(segment_id, segment_choices)),
         gr.update(value=speaker_name),
         audio_update,
         gr.update(choices=speaker_choices, value=current_speaker_id),
@@ -926,7 +938,7 @@ def select_subtitle_segment_by_id(segment_id: str | None, state_dict: dict):
                 segment.edited_text[:60],
             )
         ),
-        gr.update(choices=segment_choices, value=segment.id),
+        gr.update(choices=segment_choices, value=normalize_dropdown_value(segment.id, segment_choices)),
         gr.update(value=speaker_name),
         build_selected_segment_audio_update(episode, segment),
         gr.update(choices=speaker_choices, value=segment.speaker_id),
