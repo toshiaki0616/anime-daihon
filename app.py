@@ -9,6 +9,7 @@ from core.state_ops import (
     add_speaker_profile,
     apply_subtitle_edits,
     apply_transcription_segments,
+    apply_voiceprint_assignments_to_episode,
     build_mock_app_state,
     create_episode,
     create_work,
@@ -51,6 +52,7 @@ from services import (
     SpeakerIdentificationError,
     sync_work_dictionary,
     transcribe_wav,
+    TranscriptionSegment,
     upsert_voiceprint_profile,
     DEFAULT_MODEL_NAME,
     MODEL_OPTIONS,
@@ -929,6 +931,7 @@ def register_voiceprint(candidate_id: str | None, character_name: str | None, st
     segment = next((item for item in episode.subtitle_segments if item.id == target_segment_id), None)
     if segment is None:
         return render_all(state, "選択したセリフが見つかりません", "error")
+    original_speaker_id = segment.speaker_id
     state.selected_subtitle_segment_id = segment.id
     state.selected_speaker_id = segment.speaker_id
     state.selected_voiceprint_character_name = target_name
@@ -969,12 +972,41 @@ def register_voiceprint(candidate_id: str | None, character_name: str | None, st
     except PersistenceError as exc:
         return render_all(state, exc.user_message, "error")
 
-    state = rename_speaker(state, segment.speaker_id, target_name)
+    if episode.wav_path and Path(episode.wav_path).exists():
+        transcription_segments = [
+            TranscriptionSegment(
+                start=segment.start,
+                end=segment.end,
+                text=segment.original_text or segment.edited_text,
+                source_start=segment.source_start,
+                source_end=segment.source_end,
+            )
+            for segment in episode.subtitle_segments
+        ]
+        try:
+            current_assignments = assign_voiceprints_to_segments(
+                episode.wav_path,
+                transcription_segments,
+                profiles,
+            )
+            state = apply_voiceprint_assignments_to_episode(state, current_assignments)
+        except SpeakerIdentificationError:
+            pass
+
+    latest_episode = get_selected_episode(state)
+    latest_segment = next(
+        (item for item in latest_episode.subtitle_segments if item.id == target_segment_id),
+        None,
+    ) if latest_episode is not None else None
+    if latest_segment is not None and latest_segment.voiceprint_profile_id:
+        state.selected_speaker_id = latest_segment.speaker_id
+    else:
+        state = rename_speaker(state, original_speaker_id, target_name)
     ok, error = persist_state_or_error(state)
     if not ok:
         return render_all(state, error, "error")
 
-    return render_all(state, f"{target_name} に声紋サンプルを登録しました（{profile.sample_count}件）", "success")
+    return render_all(state, f"{target_name} に声紋サンプルを登録し、現在の話へ再適用しました（{profile.sample_count}件）", "success")
 
 
 def apply_episode_speaker_change(segment_id: str | None, target_speaker_id: str | None, state_dict: dict):

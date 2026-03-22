@@ -608,6 +608,35 @@ def apply_subtitle_edits(state: AppState, rows: list[list[str]]) -> AppState:
     return next_state
 
 
+def apply_voiceprint_assignments_to_episode(
+    state: AppState,
+    voiceprint_assignments: list[VoiceprintAssignment | None],
+) -> AppState:
+    next_state = deepcopy(state)
+    episode = get_selected_episode(next_state)
+    if episode is None or not episode.subtitle_segments:
+        return next_state
+
+    for index, segment in enumerate(episode.subtitle_segments):
+        assignment = voiceprint_assignments[index] if index < len(voiceprint_assignments) else None
+        if assignment is None:
+            segment.voiceprint_profile_id = ""
+            segment.voiceprint_character_name = ""
+            segment.voiceprint_confidence = 0.0
+            continue
+
+        segment.speaker_id = f"voiceprint_{assignment.profile_id}"
+        segment.raw_label = assignment.character_name
+        segment.display_name = assignment.character_name
+        segment.voiceprint_profile_id = assignment.profile_id
+        segment.voiceprint_character_name = assignment.character_name
+        segment.voiceprint_confidence = assignment.confidence
+
+    sync_episode(episode)
+    _touch_work_for_episode(next_state, episode)
+    return next_state
+
+
 def rename_speaker(state: AppState, speaker_id: str, new_name: str) -> AppState:
     next_state = deepcopy(state)
     episode = get_selected_episode(next_state)

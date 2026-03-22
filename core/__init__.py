@@ -1,8 +1,9 @@
-﻿from .state_ops import (
+from .state_ops import (
     MAX_SPEAKER_SLOTS,
     add_speaker_profile,
     apply_subtitle_edits,
     apply_transcription_segments,
+    apply_voiceprint_assignments_to_episode,
     build_mock_app_state,
     create_episode,
     create_work,
@@ -20,6 +21,7 @@ __all__ = [
     "add_speaker_profile",
     "apply_subtitle_edits",
     "apply_transcription_segments",
+    "apply_voiceprint_assignments_to_episode",
     "build_mock_app_state",
     "create_episode",
     "create_work",
