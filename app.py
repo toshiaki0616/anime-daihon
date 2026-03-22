@@ -175,6 +175,34 @@ def format_episode_seconds(episode, seconds: float) -> str:
     return format_seconds(offset + seconds)
 
 
+def build_selected_subtitle_label(
+    start_label: str = "",
+    duration_label: str = "",
+    speaker_name: str = "",
+    preview: str = "",
+) -> str:
+    if not start_label and not preview:
+        return (
+            "<div style='padding:12px 14px; border-radius:12px; "
+            "border:1px dashed #4b5563; background:#111827; color:#d1d5db;'>"
+            "話者欄をクリックして変更するセリフを選択してください"
+            "</div>"
+        )
+
+    return (
+        "<div style='padding:12px 14px; border-radius:12px; "
+        "border:2px solid #f97316; background:#1f2937; color:#fff7ed; "
+        "box-shadow:0 0 0 1px rgba(249,115,22,0.25) inset;'>"
+        "<div style='font-size:12px; font-weight:700; letter-spacing:0.04em; color:#fdba74;'>"
+        "SELECTED SEGMENT"
+        "</div>"
+        f"<div style='margin-top:6px; font-size:14px;'><strong>{start_label}</strong>"
+        f" / {duration_label} / {speaker_name}</div>"
+        f"<div style='margin-top:6px; font-size:15px; line-height:1.5; color:#ffffff;'>{preview}</div>"
+        "</div>"
+    )
+
+
 def get_segment_source_range(episode, segment) -> tuple[str, float, float]:
     if episode is None or segment is None:
         return "", 0.0, 0.0
@@ -367,7 +395,7 @@ def render_all(state: AppState, message: str, kind: str = "info"):
         episode.initial_prompt if episode else "",
         build_subtitle_rows(state),
         state.selected_subtitle_segment_id,
-        gr.update(value="話者欄をクリックして変更するセリフを選択してください"),
+        gr.update(value=build_selected_subtitle_label()),
         gr.update(value=""),
         gr.update(value=None, visible=False),
         gr.update(choices=build_episode_speaker_choices(state), value=None),
@@ -822,7 +850,7 @@ def select_subtitle_segment(rows, state_dict: dict, evt: gr.SelectData):
     speaker_choices = build_episode_speaker_choices(state)
     if row_index is None or row_index >= len(normalized_rows):
         state.selected_subtitle_segment_id = ""
-        return "", gr.update(value="話者欄をクリックして変更するセリフを選択してください"), gr.update(value=""), gr.update(value=None, visible=False), gr.update(choices=speaker_choices, value=None)
+        return "", gr.update(value=build_selected_subtitle_label()), gr.update(value=""), gr.update(value=None, visible=False), gr.update(choices=speaker_choices, value=None)
 
     row = normalized_rows[row_index]
     segment_id = str(row[0]) if row else ""
@@ -841,7 +869,7 @@ def select_subtitle_segment(rows, state_dict: dict, evt: gr.SelectData):
             audio_update = build_selected_segment_audio_update(episode, segment)
     return (
         segment_id,
-        gr.update(value=f"選択中: {start_label} / {duration_label} / {speaker_name} / {preview[:40]}"),
+        gr.update(value=build_selected_subtitle_label(start_label, duration_label, speaker_name, preview[:60])),
         gr.update(value=speaker_name),
         audio_update,
         gr.update(choices=speaker_choices, value=current_speaker_id),
