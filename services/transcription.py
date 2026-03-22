@@ -33,6 +33,10 @@ MODEL_OPTIONS = [
 ]
 _MODEL_CACHE: dict[str, Any] = {}
 REQUIRED_MODEL_FILES = ("config.json", "model.bin", "tokenizer.json")
+SPLIT_PUNCTUATION = "。！？!?…"
+SECONDARY_SPLIT_PUNCTUATION = "、，,・/／"
+MAX_SUBTITLE_CHARS = 28
+MIN_SUBTITLE_CHARS = 4
 
 
 def normalize_model_selection(model_name: str | None) -> str:
@@ -53,6 +57,101 @@ def find_missing_model_files(model_dir: Path) -> list[str]:
     return [name for name in REQUIRED_MODEL_FILES if not (model_dir / name).exists()]
 
 
+def _split_on_punctuation(text: str, delimiters: str) -> list[str]:
+    chunks: list[str] = []
+    current = ""
+    for char in text:
+        current += char
+        if char in delimiters:
+            cleaned = current.strip()
+            if cleaned:
+                chunks.append(cleaned)
+            current = ""
+    cleaned = current.strip()
+    if cleaned:
+        chunks.append(cleaned)
+    return chunks
+
+
+def _split_long_chunk(text: str, max_chars: int = MAX_SUBTITLE_CHARS) -> list[str]:
+    cleaned = text.strip()
+    if len(cleaned) <= max_chars:
+        return [cleaned] if cleaned else []
+
+    secondary = _split_on_punctuation(cleaned, SECONDARY_SPLIT_PUNCTUATION)
+    if len(secondary) > 1:
+        output: list[str] = []
+        for item in secondary:
+            output.extend(_split_long_chunk(item, max_chars=max_chars))
+        return output
+
+    output = []
+    start = 0
+    while start < len(cleaned):
+        output.append(cleaned[start : start + max_chars].strip())
+        start += max_chars
+    return [item for item in output if item]
+
+
+def _merge_short_chunks(chunks: list[str], min_chars: int = MIN_SUBTITLE_CHARS) -> list[str]:
+    if not chunks:
+        return []
+
+    merged: list[str] = []
+    for chunk in chunks:
+        cleaned = chunk.strip()
+        if not cleaned:
+            continue
+        if merged and len(cleaned) < min_chars:
+            merged[-1] = f"{merged[-1]}{cleaned}"
+            continue
+        merged.append(cleaned)
+    return merged
+
+
+def split_subtitle_segments(segments: list[TranscriptionSegment]) -> list[TranscriptionSegment]:
+    expanded: list[TranscriptionSegment] = []
+    for segment in segments:
+        text = segment.text.strip()
+        if not text:
+            continue
+
+        primary_chunks = _split_on_punctuation(text, SPLIT_PUNCTUATION)
+        if not primary_chunks:
+            primary_chunks = [text]
+
+        final_chunks: list[str] = []
+        for chunk in primary_chunks:
+            final_chunks.extend(_split_long_chunk(chunk))
+        final_chunks = _merge_short_chunks(final_chunks)
+
+        if len(final_chunks) <= 1:
+            expanded.append(TranscriptionSegment(start=segment.start, end=segment.end, text=text))
+            continue
+
+        total_weight = sum(max(len(chunk.strip()), 1) for chunk in final_chunks)
+        duration = max(segment.end - segment.start, 0.0)
+        current_start = segment.start
+
+        for index, chunk in enumerate(final_chunks):
+            weight = max(len(chunk.strip()), 1)
+            if index == len(final_chunks) - 1 or duration <= 0:
+                chunk_end = segment.end
+            else:
+                chunk_duration = duration * (weight / total_weight)
+                chunk_end = min(segment.end, current_start + chunk_duration)
+            expanded.append(
+                TranscriptionSegment(
+                    start=current_start,
+                    end=chunk_end,
+                    text=chunk,
+                )
+            )
+            current_start = chunk_end
+
+    return expanded
+
+
 def _load_model(model_name: str | None):
     try:
         from faster_whisper import WhisperModel  # type: ignore
@@ -65,6 +164,7 @@ def _load_model(model_name: str | None):
             "Anime Whisper モデルが見つかりませんでした。"
             "scripts\\setup_anime_whisper.ps1 を実行して、models\\anime-whisper-ct2 を準備してください"
         )
+
     missing_files = find_missing_model_files(model_dir)
     if missing_files:
         missing_list = ", ".join(missing_files)
@@ -101,7 +201,7 @@ def transcribe_wav(
 
     try:
         model = _load_model(model_name)
-        # Anime Whisper does not use initial_prompt.
+        # Anime Whisper does not use initial_prompt directly.
         segments_iter, _info = model.transcribe(
             str(source),
             language="ja",
@@ -120,12 +220,12 @@ def transcribe_wav(
     except Exception as exc:  # noqa: BLE001
         raise TranscriptionError("字幕の作成に失敗しました") from exc
 
-    segments: list[TranscriptionSegment] = []
+    raw_segments: list[TranscriptionSegment] = []
     for item in segments_iter:
         text = str(getattr(item, "text", "")).strip()
         if not text:
             continue
-        segments.append(
+        raw_segments.append(
             TranscriptionSegment(
                 start=float(getattr(item, "start", 0.0)),
                 end=float(getattr(item, "end", 0.0)),
@@ -133,6 +233,7 @@ def transcribe_wav(
             )
         )
 
+    segments = split_subtitle_segments(raw_segments)
     if not segments:
         raise TranscriptionError("字幕の作成に失敗しました。音声から文字を取得できませんでした")
     return segments
