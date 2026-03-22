@@ -239,7 +239,34 @@ def build_voiceprint_character_choices(state: AppState):
     work = get_selected_work(state)
     if work is None:
         return []
-    return [(name, name) for name in work.character_names if name.strip()]
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def add_candidate(value: str) -> None:
+        cleaned = value.strip()
+        if not cleaned or cleaned in seen:
+            return
+        seen.add(cleaned)
+        candidates.append(cleaned)
+
+    for name in work.character_names:
+        add_candidate(name)
+
+    episode = get_selected_episode(state)
+    if episode is not None:
+        for speaker in episode.speakers:
+            add_candidate(speaker.display_name or "")
+            add_candidate(speaker.raw_label or "")
+
+    try:
+        profiles, _samples = load_voiceprint_state(DATA_DIR, work.work_id)
+    except PersistenceError:
+        profiles = []
+    for profile in profiles:
+        add_candidate(profile.character_name)
+
+    return [(name, name) for name in candidates]
 
 
 def build_voiceprint_summary(state: AppState) -> str:
