@@ -5,7 +5,15 @@ from datetime import datetime
 from string import ascii_uppercase
 from typing import Callable, Iterable
 
-from models.state import AppState, Episode, PreprocessingResult, SpeakerProfile, SubtitleSegment, Work
+from models.state import (
+    AppState,
+    Episode,
+    PreprocessingResult,
+    SpeakerProfile,
+    SubtitleSegment,
+    TranscriptionResult,
+    Work,
+)
 from services.diarization import DiarizationSegment
 from services.speaker_id import VoiceprintAssignment
 from services.transcription import TranscriptionSegment
@@ -306,7 +314,7 @@ def _build_speaker_diagnostics(
 
     lines = [f"話者分離診断: 字幕候補 {len(transcription_segments)}件"]
     if not diarization_segments:
-        lines.append("話者候補は検出できず、話者Aへフォールバックしました。")
+        lines.append("話者分離はまだ実行していないため、話者Aを仮設定しています。")
     else:
         durations: dict[str, float] = {}
         for item in diarization_segments:
@@ -369,6 +377,26 @@ def record_preprocessing_error(state: AppState, source_path: str, error_message:
     next_state.last_preprocessing_error = error_message
     next_state.last_debug_output_path = ""
     next_state.last_vad_fallback_used = False
+    return next_state
+
+
+def record_transcription_result(state: AppState, result: TranscriptionResult) -> AppState:
+    next_state = deepcopy(state)
+    next_state.last_preprocessing_wav_path = result.wav_path
+    next_state.last_vad_segments = deepcopy(result.vad_segments)
+    next_state.last_raw_transcript_segments = deepcopy(result.raw_transcript_segments)
+    next_state.last_transcription_status = "partial" if result.failed_segments else "success"
+    next_state.last_transcription_error = ""
+    next_state.last_debug_asr_output_path = result.debug_paths.get("asr_segments", "")
+    return next_state
+
+
+def record_transcription_error(state: AppState, error_message: str) -> AppState:
+    next_state = deepcopy(state)
+    next_state.last_raw_transcript_segments = []
+    next_state.last_transcription_status = "error"
+    next_state.last_transcription_error = error_message
+    next_state.last_debug_asr_output_path = ""
     return next_state
 
 

@@ -91,6 +91,84 @@ class PreprocessingResult:
 
 
 @dataclass
+class RawTranscriptSegment:
+    id: str
+    start: float
+    end: float
+    text: str
+    original_text: str
+    edited_text: str
+    speaker_id: str = "A"
+    raw_label: str = "話者A"
+    display_name: str = "話者A"
+    source_start: float = 0.0
+    source_end: float = 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "RawTranscriptSegment":
+        payload = dict(data)
+        payload["start"] = float(payload.get("start", 0.0) or 0.0)
+        payload["end"] = float(payload.get("end", 0.0) or 0.0)
+        payload["source_start"] = float(payload.get("source_start", payload.get("start", 0.0)) or 0.0)
+        payload["source_end"] = float(payload.get("source_end", payload.get("end", 0.0)) or 0.0)
+        payload["text"] = str(payload.get("text", "")).strip()
+        payload["original_text"] = str(payload.get("original_text", payload.get("text", ""))).strip()
+        payload["edited_text"] = str(payload.get("edited_text", payload.get("original_text", payload.get("text", "")))).strip()
+        payload["speaker_id"] = str(payload.get("speaker_id", "A")).strip() or "A"
+        payload["raw_label"] = str(payload.get("raw_label", "話者A")).strip() or "話者A"
+        payload["display_name"] = str(payload.get("display_name", payload.get("raw_label", "話者A"))).strip() or "話者A"
+        return cls(**payload)
+
+
+@dataclass
+class TranscriptionResult:
+    source_path: str
+    wav_path: str
+    vad_segments: list[VadSegment] = field(default_factory=list)
+    raw_transcript_segments: list[RawTranscriptSegment] = field(default_factory=list)
+    debug_paths: dict[str, str] = field(default_factory=dict)
+    failed_segments: list[dict[str, Any]] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "source_path": self.source_path,
+            "wav_path": self.wav_path,
+            "vad_segments": [segment.to_dict() for segment in self.vad_segments],
+            "raw_transcript_segments": [
+                segment.to_dict() for segment in self.raw_transcript_segments
+            ],
+            "debug_paths": dict(self.debug_paths),
+            "failed_segments": [dict(item) for item in self.failed_segments],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "TranscriptionResult":
+        return cls(
+            source_path=str(data.get("source_path", "")).strip(),
+            wav_path=str(data.get("wav_path", "")).strip(),
+            vad_segments=[
+                VadSegment.from_dict(segment)
+                for segment in data.get("vad_segments", [])
+            ],
+            raw_transcript_segments=[
+                RawTranscriptSegment.from_dict(segment)
+                for segment in data.get("raw_transcript_segments", [])
+            ],
+            debug_paths={
+                str(key): str(value)
+                for key, value in dict(data.get("debug_paths", {})).items()
+            },
+            failed_segments=[
+                dict(item)
+                for item in data.get("failed_segments", [])
+            ],
+        )
+
+
+@dataclass
 class SpeakerProfile:
     speaker_id: str
     raw_label: str
@@ -300,6 +378,10 @@ class AppState:
     last_preprocessing_error: str = ""
     last_debug_output_path: str = ""
     last_vad_fallback_used: bool = False
+    last_raw_transcript_segments: list[RawTranscriptSegment] = field(default_factory=list)
+    last_transcription_status: str = ""
+    last_transcription_error: str = ""
+    last_debug_asr_output_path: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -328,6 +410,12 @@ class AppState:
             "last_preprocessing_error": self.last_preprocessing_error,
             "last_debug_output_path": self.last_debug_output_path,
             "last_vad_fallback_used": self.last_vad_fallback_used,
+            "last_raw_transcript_segments": [
+                segment.to_dict() for segment in self.last_raw_transcript_segments
+            ],
+            "last_transcription_status": self.last_transcription_status,
+            "last_transcription_error": self.last_transcription_error,
+            "last_debug_asr_output_path": self.last_debug_asr_output_path,
         }
 
     @classmethod
@@ -362,4 +450,11 @@ class AppState:
             last_preprocessing_error=data.get("last_preprocessing_error", ""),
             last_debug_output_path=data.get("last_debug_output_path", ""),
             last_vad_fallback_used=bool(data.get("last_vad_fallback_used", False)),
+            last_raw_transcript_segments=[
+                RawTranscriptSegment.from_dict(segment)
+                for segment in data.get("last_raw_transcript_segments", [])
+            ],
+            last_transcription_status=data.get("last_transcription_status", ""),
+            last_transcription_error=data.get("last_transcription_error", ""),
+            last_debug_asr_output_path=data.get("last_debug_asr_output_path", ""),
         )

@@ -20,6 +20,8 @@ from core.state_ops import (
     move_segment_to_speaker,
     record_preprocessing_error,
     record_preprocessing_result,
+    record_transcription_error,
+    record_transcription_result,
     rename_speaker,
     swap_speakers,
     sync_episode,
@@ -52,6 +54,7 @@ from services import (
     merge_dictionaries,
     preprocess_media,
     run_preprocessing_pipeline,
+    run_transcription_pipeline,
     save_library_state,
     save_voiceprint_state,
     save_work_dictionary,
@@ -634,14 +637,9 @@ def generate_subtitles(file_path: str | None, start_time: str, end_time: str, en
     episode.initial_prompt = initial_prompt.strip()
     prompt_text = build_transcription_prompt(state, initial_prompt)
     work_dictionary = None
-    voiceprint_profiles = []
     if work is not None:
         work_dictionary = sync_work_dictionary(DATA_DIR, work.work_id, work.title, work.character_names)
         work_dictionary = merge_dictionaries(work_dictionary, build_prompt_dictionary(initial_prompt))
-        try:
-            voiceprint_profiles, _voiceprint_samples = load_voiceprint_state(DATA_DIR, work.work_id)
-        except PersistenceError:
-            voiceprint_profiles = []
 
     try:
         preprocessing_result = run_preprocessing_pipeline(
@@ -652,35 +650,20 @@ def generate_subtitles(file_path: str | None, start_time: str, end_time: str, en
             progress_callback=lambda value, message: progress(value, desc=message),
         )
         state = record_preprocessing_result(state, preprocessing_result)
-        progress(0.4, desc="音声を文字にしています...")
-        transcription_segments = transcribe_wav(
-            preprocessing_result.normalized_wav_path,
+        transcription_result = run_transcription_pipeline(
+            preprocessing_result=preprocessing_result,
             model_name=episode.whisper_model,
             initial_prompt=prompt_text,
+            data_dir=DATA_DIR,
+            progress_callback=lambda value, message: progress(value, desc=message),
         )
+        state = record_transcription_result(state, transcription_result)
     except AudioSegmentationError as exc:
         state = record_preprocessing_error(state, str(file_path or ""), exc.user_message)
         return render_all(state, exc.user_message, "error")
     except TranscriptionError as exc:
+        state = record_transcription_error(state, exc.user_message)
         return render_all(state, exc.user_message, "error")
-
-    diarization_segments = []
-    diarization_failed = False
-    voiceprint_assignments = []
-    if voiceprint_profiles:
-        try:
-            voiceprint_assignments = assign_voiceprints_to_segments(
-                preprocessing_result.normalized_wav_path,
-                transcription_segments,
-                voiceprint_profiles,
-            )
-        except SpeakerIdentificationError:
-            voiceprint_assignments = []
-    progress(0.72, desc="話者ごとに分けています...")
-    try:
-        diarization_segments = diarize_wav(preprocessing_result.normalized_wav_path)
-    except DiarizationError:
-        diarization_failed = True
 
     state = apply_transcription_segments(
         state=state,
@@ -689,20 +672,29 @@ def generate_subtitles(file_path: str | None, start_time: str, end_time: str, en
         range_start=start_time.strip(),
         range_end=end_time.strip(),
         enhance_audio=enhance_audio,
-        transcription_segments=transcription_segments,
-        diarization_segments=diarization_segments,
+        transcription_segments=[
+            TranscriptionSegment(
+                start=item.start,
+                end=item.end,
+                text=item.original_text,
+                source_start=item.source_start,
+                source_end=item.source_end,
+            )
+            for item in transcription_result.raw_transcript_segments
+        ],
+        diarization_segments=[],
         text_postprocessor=lambda text: apply_dictionary(text, work_dictionary),
-        voiceprint_assignments=voiceprint_assignments,
+        voiceprint_assignments=[],
     )
     state.voiceprint_candidates = []
     state.selected_voiceprint_candidate_id = ""
     progress(1.0, desc="字幕を作成しました")
-    if preprocessing_result.fallback_used and diarization_failed:
-        return render_all(state, "字幕を作成しましたが、発話区間と話者分割はフォールバックを含みます", "info")
+    if transcription_result.failed_segments and preprocessing_result.fallback_used:
+        return render_all(state, "字幕を作成しました（一部の区間はフォールバックや失敗を含みます）", "info")
+    if transcription_result.failed_segments:
+        return render_all(state, "字幕を作成しました（一部の区間は失敗しました）", "info")
     if preprocessing_result.fallback_used:
         return render_all(state, "字幕を作成しました（発話区間はフォールバック）", "info")
-    if diarization_failed:
-        return render_all(state, "話者の分割に失敗しました", "error")
     return render_all(state, "字幕を作成しました", "success")
 
 

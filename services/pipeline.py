@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Callable
 
-from models.state import PreprocessingResult, VadSegment
+from models.state import PreprocessingResult, TranscriptionResult, VadSegment
 
 from .audio_segmentation import (
     AudioSegmentationError,
@@ -14,6 +14,7 @@ from .audio_segmentation import (
     segment_speech_with_vad,
     split_long_vad_segments,
 )
+from .transcription import TranscriptionError, transcribe_segments
 
 
 ProgressCallback = Callable[[float, str], None]
@@ -21,6 +22,8 @@ EXTRACTING_AUDIO_MESSAGE = "\u97f3\u58f0\u3092\u53d6\u308a\u51fa\u3057\u3066\u30
 RUNNING_VAD_MESSAGE = "\u767a\u8a71\u533a\u9593\u3092\u62bd\u51fa\u3057\u3066\u3044\u307e\u3059..."
 PREPROCESS_DONE_MESSAGE = "\u524d\u51e6\u7406\u304c\u5b8c\u4e86\u3057\u307e\u3057\u305f..."
 PREPROCESS_SAVE_ERROR = "\u524d\u51e6\u7406\u7d50\u679c\u306e\u4fdd\u5b58\u306b\u5931\u6557\u3057\u307e\u3057\u305f"
+RUNNING_ASR_MESSAGE = "\u5b57\u5e55\u3092\u4f5c\u6210\u3057\u3066\u3044\u307e\u3059..."
+ASR_SAVE_ERROR = "\u5b57\u5e55\u306e\u4f5c\u6210\u306b\u5931\u6557\u3057\u307e\u3057\u305f"
 
 
 def run_preprocessing_pipeline(
@@ -68,6 +71,41 @@ def run_preprocessing_pipeline(
     return result
 
 
+def run_transcription_pipeline(
+    preprocessing_result: PreprocessingResult,
+    model_name: str,
+    initial_prompt: str,
+    data_dir: str | Path,
+    progress_callback: ProgressCallback | None = None,
+) -> TranscriptionResult:
+    debug_dir = Path(data_dir) / "debug"
+    temp_dir = Path(data_dir) / "processed" / "asr_segments"
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
+    _notify(progress_callback, 0.44, RUNNING_ASR_MESSAGE)
+    raw_segments, failed_segments = transcribe_segments(
+        wav_path=preprocessing_result.normalized_wav_path,
+        vad_segments=preprocessing_result.vad_segments,
+        model_name=model_name,
+        initial_prompt=initial_prompt,
+        temp_dir=temp_dir,
+    )
+
+    result = TranscriptionResult(
+        source_path=preprocessing_result.source_path,
+        wav_path=preprocessing_result.normalized_wav_path,
+        vad_segments=list(preprocessing_result.vad_segments),
+        raw_transcript_segments=raw_segments,
+        debug_paths={},
+        failed_segments=failed_segments,
+    )
+    debug_path = debug_dir / "debug_asr_segments.json"
+    result.debug_paths = {"asr_segments": str(debug_path)}
+    _write_asr_debug_output(result, debug_path)
+    return result
+
+
 def _build_full_range_fallback(wav_path: str) -> list[VadSegment]:
     duration = max(0.0, get_audio_duration_seconds(wav_path))
     return [VadSegment(start=0.0, end=duration)]
@@ -93,6 +131,22 @@ def _write_vad_debug_output(
         output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     except OSError as exc:
         raise AudioSegmentationError(PREPROCESS_SAVE_ERROR) from exc
+
+
+def _write_asr_debug_output(result: TranscriptionResult, output_path: Path) -> None:
+    payload = {
+        "source_file_path": result.source_path,
+        "normalized_wav_path": result.wav_path,
+        "vad_segments_used": [segment.to_dict() for segment in result.vad_segments],
+        "raw_asr_text_per_segment": [segment.to_dict() for segment in result.raw_transcript_segments],
+        "output_subtitle_segments": [segment.to_dict() for segment in result.raw_transcript_segments],
+        "failed_segments": [dict(item) for item in result.failed_segments],
+        "debug_paths": dict(result.debug_paths),
+    }
+    try:
+        output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as exc:
+        raise TranscriptionError(ASR_SAVE_ERROR) from exc
 
 
 def _notify(progress_callback: ProgressCallback | None, value: float, message: str) -> None:

@@ -28,7 +28,7 @@ from .persistence import (
     save_library_state,
     save_voiceprint_state,
 )
-from .pipeline import run_preprocessing_pipeline
+from .pipeline import run_preprocessing_pipeline, run_transcription_pipeline
 from .preprocess import MediaPreprocessError, PreprocessResult, extract_audio_clip, preprocess_media
 from .speaker_id import (
     SpeakerIdentificationError,
@@ -49,6 +49,8 @@ from .transcription import (
     TranscriptionError,
     TranscriptionSegment,
     normalize_model_selection,
+    transcribe_segment,
+    transcribe_segments,
     transcribe_wav,
 )
 
@@ -91,6 +93,7 @@ __all__ = [
     "normalize_audio",
     "preprocess_media",
     "run_preprocessing_pipeline",
+    "run_transcription_pipeline",
     "save_library_state",
     "save_voiceprint_state",
     "save_work_dictionary",
@@ -99,6 +102,8 @@ __all__ = [
     "segment_speech_with_vad",
     "split_long_vad_segments",
     "sync_work_dictionary",
+    "transcribe_segment",
+    "transcribe_segments",
     "transcribe_wav",
     "upsert_voiceprint_profile",
 ]
