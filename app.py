@@ -40,6 +40,7 @@ from services import (
     PersistenceError,
     TranscriptionError,
     apply_dictionary,
+    build_voiceprint_candidates_from_clean_segments_only,
     assign_voiceprints_to_segments,
     build_voiceprint_sample,
     build_prompt_dictionary,
@@ -119,14 +120,20 @@ def normalize_voiceprint_candidate_state(state: AppState) -> None:
         state.selected_voiceprint_candidate_id = ""
         return
 
-    state.voiceprint_candidates = [
+    filtered_candidates = [
         candidate
         for candidate in state.voiceprint_candidates
         if candidate.episode_id == episode.episode_id
     ]
-    valid_ids = {candidate.candidate_id for candidate in state.voiceprint_candidates}
+    if not filtered_candidates and episode.subtitle_segments:
+        filtered_candidates = build_voiceprint_candidates_from_clean_segments_only(
+            episode_id=episode.episode_id,
+            subtitle_segments=episode.subtitle_segments,
+        )
+    state.voiceprint_candidates = filtered_candidates
+    valid_ids = {candidate.candidate_id for candidate in filtered_candidates}
     if state.selected_voiceprint_candidate_id not in valid_ids:
-        state.selected_voiceprint_candidate_id = ""
+        state.selected_voiceprint_candidate_id = filtered_candidates[0].candidate_id if filtered_candidates else ""
 
 
 def _truncate_preview(text: str, limit: int = 48) -> str:
@@ -411,6 +418,21 @@ def render_all(state: AppState, message: str, kind: str = "info"):
     ):
         state.selected_voiceprint_character_name = ""
     subtitle_segment_choices = build_subtitle_segment_choices(state)
+    selected_segment = None
+    if episode is not None and state.selected_subtitle_segment_id:
+        selected_segment = next(
+            (item for item in episode.subtitle_segments if item.id == state.selected_subtitle_segment_id),
+            None,
+        )
+    selected_speaker_name = ""
+    selected_audio_update = gr.update(value=None, visible=False)
+    selected_speaker_target_value = None
+    if selected_segment is not None:
+        selected_speaker_name = selected_segment.display_name
+        if selected_segment.voiceprint_profile_id and selected_segment.voiceprint_confidence < 0.75:
+            selected_speaker_name = f"MEDIUM | {selected_segment.display_name}"
+        selected_audio_update = build_selected_segment_audio_update(episode, selected_segment)
+        selected_speaker_target_value = selected_segment.speaker_id
     speaker_detail = build_speaker_detail_payload(state)
 
     outputs = [
@@ -435,20 +457,27 @@ def render_all(state: AppState, message: str, kind: str = "info"):
         episode.initial_prompt if episode else "",
         build_subtitle_rows(state),
         state.selected_subtitle_segment_id,
-        gr.update(value=build_selected_subtitle_label()),
+        gr.update(
+            value=build_selected_subtitle_label(
+                f"[{format_episode_seconds(episode, get_display_segment_start(selected_segment))}]" if selected_segment is not None else "",
+                f"{get_display_segment_duration(selected_segment):.2f}s" if selected_segment is not None else "",
+                selected_speaker_name,
+                selected_segment.edited_text[:60] if selected_segment is not None else "",
+            )
+        ),
         gr.update(
             choices=subtitle_segment_choices,
             value=normalize_dropdown_value(state.selected_subtitle_segment_id, subtitle_segment_choices),
         ),
-        gr.update(value=""),
-        gr.update(value=None, visible=False),
-        gr.update(choices=build_episode_speaker_choices(state), value=None),
+        gr.update(value=selected_speaker_name),
+        selected_audio_update,
+        gr.update(choices=build_episode_speaker_choices(state), value=selected_speaker_target_value),
         gr.update(value=episode.speaker_diagnostics if episode and episode.speaker_diagnostics else "話者分離診断: まだありません。"),
         gr.update(value=build_voiceprint_selection_label(state), visible=bool(episode and episode.subtitle_segments)),
         gr.update(
             choices=build_voiceprint_candidate_choices(state),
             value=state.selected_voiceprint_candidate_id or None,
-            visible=bool(state.voiceprint_candidates),
+            visible=bool(episode and episode.subtitle_segments),
         ),
         gr.update(choices=build_voiceprint_character_choices(state), value=state.selected_voiceprint_character_name or None),
         gr.update(value=build_voiceprint_summary(state)),
@@ -711,8 +740,10 @@ def generate_subtitles(file_path: str | None, start_time: str, end_time: str, en
     progress(1.0, desc="字幕を作成しました")
     if assignment_result.fallback_used and transcription_result.failed_segments and preprocessing_result.fallback_used:
         return render_all(state, "字幕を作成しました（一部の区間はフォールバックや失敗を含みます）", "info")
-    if assignment_result.fallback_used:
+    if assignment_result.fallback_used and len(get_selected_episode(state).speakers) <= 1 and assignment_result.error_message:
         return render_all(state, "話者の分割に失敗しました", "error")
+    if assignment_result.fallback_used:
+        return render_all(state, "字幕を作成しました（話者はフォールバック推定です）", "info")
     if transcription_result.failed_segments:
         return render_all(state, "字幕を作成しました（一部の区間は失敗しました）", "info")
     if preprocessing_result.fallback_used:

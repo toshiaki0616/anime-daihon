@@ -200,7 +200,7 @@ def _run_ffmpeg(command: list[str], user_message: str) -> None:
             command,
             check=False,
             capture_output=True,
-            text=True,
+            text=False,
         )
     except OSError as exc:
         raise AudioSegmentationError(user_message) from exc

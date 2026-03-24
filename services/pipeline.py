@@ -144,9 +144,13 @@ def run_diarization_pipeline(
     assignment_result = assign_dominant_speaker_to_segments(
         transcript_segments=transcription_result.raw_transcript_segments,
         diarization_segments=diarization_segments,
+        wav_path=preprocessing_result.normalized_wav_path,
     )
     assignment_result.fallback_used = fallback_used
-    assignment_result.error_message = error_message
+    if not assignment_result.diarization_segments:
+        assignment_result.error_message = error_message
+    elif fallback_used:
+        assignment_result.error_message = ""
 
     diarization_debug_path = debug_dir / "debug_diarization_segments.json"
     final_debug_path = debug_dir / "debug_final_segments.json"

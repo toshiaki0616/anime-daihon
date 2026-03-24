@@ -30,14 +30,19 @@ def choose_display_start_time(
     diarization_segments: list[DiarizationSegment],
 ) -> float:
     matched_vad = _find_covering_vad_segment(segment, vad_segments)
+    raw_start = segment.raw_start or segment.start
     if matched_vad is not None:
+        if matched_vad.start <= raw_start <= matched_vad.end:
+            return raw_start
         return matched_vad.start
 
     matched_diarization = _find_dominant_diarization_overlap(segment, diarization_segments)
     if matched_diarization is not None:
+        if matched_diarization.start <= raw_start <= matched_diarization.end:
+            return raw_start
         return matched_diarization.start
 
-    return segment.raw_start or segment.start
+    return raw_start
 
 
 def choose_display_end_time(
@@ -46,14 +51,19 @@ def choose_display_end_time(
     diarization_segments: list[DiarizationSegment],
 ) -> float:
     matched_vad = _find_covering_vad_segment(segment, vad_segments)
+    raw_end = segment.raw_end or segment.end
     if matched_vad is not None:
+        if matched_vad.start <= raw_end <= matched_vad.end:
+            return raw_end
         return matched_vad.end
 
     matched_diarization = _find_dominant_diarization_overlap(segment, diarization_segments)
     if matched_diarization is not None:
+        if matched_diarization.start <= raw_end <= matched_diarization.end:
+            return raw_end
         return matched_diarization.end
 
-    return segment.raw_end or segment.end
+    return raw_end
 
 
 def _find_covering_vad_segment(
