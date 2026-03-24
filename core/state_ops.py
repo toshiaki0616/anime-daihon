@@ -416,6 +416,14 @@ def record_diarization_result(state: AppState, result: SpeakerAssignmentResult) 
     next_state.last_diarization_error = result.error_message
     next_state.last_debug_diarization_output_path = result.debug_paths.get("diarization_segments", "")
     next_state.last_debug_final_output_path = result.debug_paths.get("final_segments", "")
+    next_state.last_debug_refined_output_path = result.debug_paths.get("refined_segments", "")
+    next_state.last_debug_voiceprint_candidates_output_path = result.debug_paths.get("voiceprint_candidates", "")
+    next_state.voiceprint_candidates = deepcopy(result.voiceprint_candidates)
+    valid_ids = {candidate.candidate_id for candidate in next_state.voiceprint_candidates}
+    if next_state.selected_voiceprint_candidate_id not in valid_ids:
+        next_state.selected_voiceprint_candidate_id = (
+            next_state.voiceprint_candidates[0].candidate_id if next_state.voiceprint_candidates else ""
+        )
     return next_state
 
 
@@ -427,6 +435,10 @@ def record_diarization_error(state: AppState, error_message: str) -> AppState:
     next_state.last_diarization_error = error_message
     next_state.last_debug_diarization_output_path = ""
     next_state.last_debug_final_output_path = ""
+    next_state.last_debug_refined_output_path = ""
+    next_state.last_debug_voiceprint_candidates_output_path = ""
+    next_state.voiceprint_candidates = []
+    next_state.selected_voiceprint_candidate_id = ""
     return next_state
 
 
@@ -726,6 +738,10 @@ def apply_assigned_transcript_segments(
                 end=item.end,
                 source_start=item.source_start or item.start,
                 source_end=item.source_end or item.end,
+                raw_start=item.raw_start or item.start,
+                raw_end=item.raw_end or item.end,
+                refined_start=item.refined_start or item.source_start or item.start,
+                refined_end=item.refined_end or item.source_end or item.end,
                 speaker_id=item.speaker_id or FALLBACK_SPEAKER_ID,
                 raw_label=item.raw_label or FALLBACK_LABEL,
                 display_name=item.display_name or item.raw_label or FALLBACK_LABEL,

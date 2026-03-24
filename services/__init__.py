@@ -59,6 +59,11 @@ from .speaker_id import (
     select_best_voiceprint_match,
     upsert_voiceprint_profile,
 )
+from .timestamp_refinement import (
+    choose_display_end_time,
+    choose_display_start_time,
+    refine_segment_timestamps,
+)
 from .transcription import (
     DEFAULT_MODEL_NAME,
     MODEL_OPTIONS,
@@ -68,6 +73,11 @@ from .transcription import (
     transcribe_segment,
     transcribe_segments,
     transcribe_wav,
+)
+from .voiceprint import (
+    build_voiceprint_candidate_metadata,
+    build_voiceprint_candidates_from_clean_segments_only,
+    is_good_voiceprint_candidate,
 )
 
 __all__ = [
@@ -89,6 +99,8 @@ __all__ = [
     "apply_dictionary",
     "build_prompt_dictionary",
     "build_speaker_profiles_from_segments",
+    "build_voiceprint_candidate_metadata",
+    "build_voiceprint_candidates_from_clean_segments_only",
     "assign_voiceprints_to_segments",
     "assign_dominant_speaker_to_segments",
     "average_embedding",
@@ -101,6 +113,7 @@ __all__ = [
     "ensure_voiceprint_storage",
     "extract_audio_clip",
     "get_audio_duration_seconds",
+    "is_good_voiceprint_candidate",
     "export_episode_csv",
     "export_episode_txt",
     "extract_voice_embedding",
@@ -114,6 +127,9 @@ __all__ = [
     "normalize_audio",
     "normalize_raw_speaker_labels",
     "preprocess_media",
+    "choose_display_end_time",
+    "choose_display_start_time",
+    "refine_segment_timestamps",
     "run_diarization_pipeline",
     "run_preprocessing_pipeline",
     "run_transcription_pipeline",

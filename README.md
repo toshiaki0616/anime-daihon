@@ -1,8 +1,8 @@
 # Subtitle Library UI
 
-This project uses **faster-whisper + Anime Whisper** for transcription and now includes preprocessing, segmented ASR, and full-range diarization for stable subtitle speaker labels.
+This project uses **faster-whisper + Anime Whisper** for transcription and now includes preprocessing, segmented ASR, full-range diarization, refined subtitle timing, and helper-grade voiceprint candidates.
 
-## Phase 1 and Phase 2 overview
+## Phase 1 to Phase 4 overview
 
 The current pipeline now does the following:
 
@@ -12,12 +12,15 @@ The current pipeline now does the following:
 - build structured subtitle segments from segmented ASR results
 - run diarization on the full processed wav or selected range
 - assign dominant speaker clusters back onto subtitle rows as stable `話者A / 話者B / 話者C`
+- refine displayed subtitle start times from VAD and diarization context instead of relying only on raw ASR timing
+- generate voiceprint candidates only from cleaner subtitle/audio segments
 - save debug output to `data/debug/debug_vad_segments.json`
 - save ASR debug output to `data/debug/debug_asr_segments.json`
 - save diarization and final merged output to `data/debug/debug_diarization_segments.json` and `data/debug/debug_final_segments.json`
+- save refined timing and voiceprint candidate output to `data/debug/debug_refined_segments.json` and `data/debug/debug_voiceprint_candidates.json`
 - keep the existing UI mostly unchanged while moving media logic out of `app.py`
 
-This stage still does not redesign voiceprint behavior, character naming, or advanced timestamp refinement yet.
+Voiceprint is now treated as a support feature only. The main speaker assignment flow remains full-range diarization plus manual `話者A / 話者B / 話者C` naming.
 
 ## Install dependencies
 
@@ -65,6 +68,8 @@ data/debug/debug_vad_segments.json
 data/debug/debug_asr_segments.json
 data/debug/debug_diarization_segments.json
 data/debug/debug_final_segments.json
+data/debug/debug_refined_segments.json
+data/debug/debug_voiceprint_candidates.json
 ```
 
 The debug files include:
@@ -78,6 +83,8 @@ The debug files include:
 - output subtitle segments generated from segmented ASR
 - full-range diarization output
 - normalized raw-speaker to `話者A / 話者B / 話者C` mapping
+- raw and refined subtitle timestamps for comparison
+- accepted voiceprint candidates with durations and quality flags
 - final subtitle rows with assigned speaker labels
 
 ## Run the app

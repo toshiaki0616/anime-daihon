@@ -16,6 +16,10 @@ class SubtitleSegment:
     edited_text: str
     source_start: float = 0.0
     source_end: float = 0.0
+    raw_start: float = 0.0
+    raw_end: float = 0.0
+    refined_start: float = 0.0
+    refined_end: float = 0.0
     voiceprint_profile_id: str = ""
     voiceprint_character_name: str = ""
     voiceprint_confidence: float = 0.0
@@ -28,6 +32,10 @@ class SubtitleSegment:
         payload = dict(data)
         payload["source_start"] = float(payload.get("source_start", payload.get("start", 0.0)) or 0.0)
         payload["source_end"] = float(payload.get("source_end", payload.get("end", 0.0)) or 0.0)
+        payload["raw_start"] = float(payload.get("raw_start", payload.get("start", 0.0)) or 0.0)
+        payload["raw_end"] = float(payload.get("raw_end", payload.get("end", 0.0)) or 0.0)
+        payload["refined_start"] = float(payload.get("refined_start", payload.get("source_start", payload.get("start", 0.0))) or 0.0)
+        payload["refined_end"] = float(payload.get("refined_end", payload.get("source_end", payload.get("end", 0.0))) or 0.0)
         payload["voiceprint_profile_id"] = str(payload.get("voiceprint_profile_id", "")).strip()
         payload["voiceprint_character_name"] = str(payload.get("voiceprint_character_name", "")).strip()
         payload["voiceprint_confidence"] = float(payload.get("voiceprint_confidence", 0.0) or 0.0)
@@ -103,6 +111,10 @@ class RawTranscriptSegment:
     display_name: str = "話者A"
     source_start: float = 0.0
     source_end: float = 0.0
+    raw_start: float = 0.0
+    raw_end: float = 0.0
+    refined_start: float = 0.0
+    refined_end: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -114,6 +126,10 @@ class RawTranscriptSegment:
         payload["end"] = float(payload.get("end", 0.0) or 0.0)
         payload["source_start"] = float(payload.get("source_start", payload.get("start", 0.0)) or 0.0)
         payload["source_end"] = float(payload.get("source_end", payload.get("end", 0.0)) or 0.0)
+        payload["raw_start"] = float(payload.get("raw_start", payload.get("start", 0.0)) or 0.0)
+        payload["raw_end"] = float(payload.get("raw_end", payload.get("end", 0.0)) or 0.0)
+        payload["refined_start"] = float(payload.get("refined_start", payload.get("source_start", payload.get("start", 0.0))) or 0.0)
+        payload["refined_end"] = float(payload.get("refined_end", payload.get("source_end", payload.get("end", 0.0))) or 0.0)
         payload["text"] = str(payload.get("text", "")).strip()
         payload["original_text"] = str(payload.get("original_text", payload.get("text", ""))).strip()
         payload["edited_text"] = str(payload.get("edited_text", payload.get("original_text", payload.get("text", "")))).strip()
@@ -194,6 +210,7 @@ class SpeakerAssignmentResult:
     assigned_subtitle_segments: list[RawTranscriptSegment] = field(default_factory=list)
     ui_speaker_map: dict[str, str] = field(default_factory=dict)
     speaker_profiles: list["SpeakerProfile"] = field(default_factory=list)
+    voiceprint_candidates: list["VoiceprintCandidate"] = field(default_factory=list)
     debug_paths: dict[str, str] = field(default_factory=dict)
     fallback_used: bool = False
     error_message: str = ""
@@ -206,6 +223,7 @@ class SpeakerAssignmentResult:
             ],
             "ui_speaker_map": dict(self.ui_speaker_map),
             "speaker_profiles": [profile.to_dict() for profile in self.speaker_profiles],
+            "voiceprint_candidates": [candidate.to_dict() for candidate in self.voiceprint_candidates],
             "debug_paths": dict(self.debug_paths),
             "fallback_used": self.fallback_used,
             "error_message": self.error_message,
@@ -229,6 +247,10 @@ class SpeakerAssignmentResult:
             speaker_profiles=[
                 SpeakerProfile.from_dict(profile)
                 for profile in data.get("speaker_profiles", [])
+            ],
+            voiceprint_candidates=[
+                VoiceprintCandidate.from_dict(candidate)
+                for candidate in data.get("voiceprint_candidates", [])
             ],
             debug_paths={
                 str(key): str(value)
@@ -411,6 +433,8 @@ class VoiceprintCandidate:
     clip_start: float
     clip_end: float
     transcript_text: str = ""
+    duration: float = 0.0
+    confidence_flags: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -421,6 +445,8 @@ class VoiceprintCandidate:
         payload["clip_start"] = float(payload.get("clip_start", 0.0) or 0.0)
         payload["clip_end"] = float(payload.get("clip_end", 0.0) or 0.0)
         payload["transcript_text"] = str(payload.get("transcript_text", "")).strip()
+        payload["duration"] = float(payload.get("duration", max(0.0, payload["clip_end"] - payload["clip_start"])) or 0.0)
+        payload["confidence_flags"] = [str(value) for value in payload.get("confidence_flags", [])]
         return cls(**payload)
 
 
@@ -459,6 +485,8 @@ class AppState:
     last_diarization_error: str = ""
     last_debug_diarization_output_path: str = ""
     last_debug_final_output_path: str = ""
+    last_debug_refined_output_path: str = ""
+    last_debug_voiceprint_candidates_output_path: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -501,6 +529,8 @@ class AppState:
             "last_diarization_error": self.last_diarization_error,
             "last_debug_diarization_output_path": self.last_debug_diarization_output_path,
             "last_debug_final_output_path": self.last_debug_final_output_path,
+            "last_debug_refined_output_path": self.last_debug_refined_output_path,
+            "last_debug_voiceprint_candidates_output_path": self.last_debug_voiceprint_candidates_output_path,
         }
 
     @classmethod
@@ -554,4 +584,6 @@ class AppState:
             last_diarization_error=data.get("last_diarization_error", ""),
             last_debug_diarization_output_path=data.get("last_debug_diarization_output_path", ""),
             last_debug_final_output_path=data.get("last_debug_final_output_path", ""),
+            last_debug_refined_output_path=data.get("last_debug_refined_output_path", ""),
+            last_debug_voiceprint_candidates_output_path=data.get("last_debug_voiceprint_candidates_output_path", ""),
         )

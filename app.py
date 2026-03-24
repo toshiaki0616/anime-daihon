@@ -136,25 +136,24 @@ def _truncate_preview(text: str, limit: int = 48) -> str:
     return f"{cleaned[:limit - 1]}…"
 
 
-def build_voiceprint_candidates_for_episode(state: AppState) -> list[VoiceprintCandidate]:
-    episode = get_selected_episode(state)
-    if episode is None or not episode.subtitle_segments:
-        return []
+def get_display_segment_start(segment) -> float:
+    if getattr(segment, "refined_start", 0.0):
+        return float(segment.refined_start)
+    if getattr(segment, "source_start", 0.0):
+        return float(segment.source_start)
+    return float(getattr(segment, "start", 0.0) or 0.0)
 
-    candidates: list[VoiceprintCandidate] = []
-    for index, segment in enumerate(episode.subtitle_segments, start=1):
-        candidates.append(
-            VoiceprintCandidate(
-                candidate_id=f"vpc_{index:02d}",
-                episode_id=episode.episode_id,
-                source_segment_id=segment.id,
-                speaker_id=segment.speaker_id,
-                clip_start=segment.start,
-                clip_end=segment.end,
-                transcript_text=segment.edited_text,
-            )
-        )
-    return candidates
+
+def get_display_segment_end(segment) -> float:
+    if getattr(segment, "refined_end", 0.0):
+        return float(segment.refined_end)
+    if getattr(segment, "source_end", 0.0):
+        return float(segment.source_end)
+    return float(getattr(segment, "end", 0.0) or 0.0)
+
+
+def get_display_segment_duration(segment) -> float:
+    return max(0.0, get_display_segment_end(segment) - get_display_segment_start(segment))
 
 
 def build_voiceprint_candidate_choices(state: AppState):
@@ -162,10 +161,13 @@ def build_voiceprint_candidate_choices(state: AppState):
     episode = get_selected_episode(state)
     choices = []
     for candidate in state.voiceprint_candidates:
-        duration = max(0.0, candidate.clip_end - candidate.clip_start)
+        duration = candidate.duration or max(0.0, candidate.clip_end - candidate.clip_start)
+        flag_suffix = ""
+        if candidate.confidence_flags:
+            flag_suffix = f" [{' / '.join(candidate.confidence_flags)}]"
         label = (
             f"[{format_episode_seconds(episode, candidate.clip_start)} - {format_episode_seconds(episode, candidate.clip_end)}] "
-            f"{duration:.2f}s / {_truncate_preview(candidate.transcript_text)}"
+            f"{duration:.2f}s / {_truncate_preview(candidate.transcript_text)}{flag_suffix}"
         )
         choices.append((label, candidate.candidate_id))
     return choices
@@ -219,11 +221,13 @@ def build_selected_subtitle_label(
 def get_segment_source_range(episode, segment) -> tuple[str, float, float]:
     if episode is None or segment is None:
         return "", 0.0, 0.0
+    display_start = get_display_segment_start(segment)
+    display_end = get_display_segment_end(segment)
     if episode.wav_path and Path(episode.wav_path).exists():
-        return episode.wav_path, segment.start, segment.end
+        return episode.wav_path, display_start, display_end
     offset = parse_time_offset_seconds(episode.range_start)
     source_path = episode.file_path or episode.wav_path
-    return source_path, offset + segment.start, offset + segment.end
+    return source_path, offset + display_start, offset + display_end
 
 
 def build_selected_segment_audio_update(episode, segment):
@@ -316,7 +320,7 @@ def build_subtitle_segment_choices(state: AppState):
         return []
     return [
         (
-            f"{segment.id} | {format_episode_seconds(episode, segment.source_start or segment.start)} | {_truncate_preview(segment.edited_text, 36)}",
+            f"{segment.id} | {format_episode_seconds(episode, get_display_segment_start(segment))} | {_truncate_preview(segment.edited_text, 36)}",
             segment.id,
         )
         for segment in episode.subtitle_segments
@@ -354,20 +358,21 @@ def build_voiceprint_selection_label(state: AppState) -> str:
     episode = get_selected_episode(state)
     selected_candidate = find_selected_voiceprint_candidate(state)
     if selected_candidate is not None:
-        duration = max(0.0, selected_candidate.clip_end - selected_candidate.clip_start)
+        duration = selected_candidate.duration or max(0.0, selected_candidate.clip_end - selected_candidate.clip_start)
+        flags = ""
+        if selected_candidate.confidence_flags:
+            flags = f" / {', '.join(selected_candidate.confidence_flags)}"
         return (
-            "選択中サンプル: "
+            "選択中の声紋候補: "
             f"[{format_episode_seconds(episode, selected_candidate.clip_start)} - {format_episode_seconds(episode, selected_candidate.clip_end)}] "
-            f"{duration:.2f}s / {_truncate_preview(selected_candidate.transcript_text, limit=64)}"
+            f"{duration:.2f}s / {_truncate_preview(selected_candidate.transcript_text, limit=64)}{flags}"
         )
 
-    segment_id = state.selected_subtitle_segment_id
-    if episode is None or not segment_id:
-        return "声紋サンプルを作成すると、3秒前後の候補をここから選べます。"
-    segment = next((item for item in episode.subtitle_segments if item.id == segment_id), None)
-    if segment is None:
-        return "声紋サンプルを作成すると、3秒前後の候補をここから選べます。"
-    return f"現在の行: [{format_episode_seconds(episode, segment.start)}] {_truncate_preview(segment.edited_text)}"
+    if episode is None:
+        return "高品質な声紋候補は、字幕生成後にここへ表示されます。"
+    if state.voiceprint_candidates:
+        return f"高品質な声紋候補が {len(state.voiceprint_candidates)} 件あります。候補を選んで登録してください。"
+    return "この話では、高品質な声紋候補はまだ見つかっていません。"
 
 
 def build_dictionary_rows(state: AppState):
@@ -439,8 +444,12 @@ def render_all(state: AppState, message: str, kind: str = "info"):
         gr.update(value=None, visible=False),
         gr.update(choices=build_episode_speaker_choices(state), value=None),
         gr.update(value=episode.speaker_diagnostics if episode and episode.speaker_diagnostics else "話者分離診断: まだありません。"),
-        gr.update(value=build_voiceprint_selection_label(state)),
-        gr.update(choices=build_voiceprint_candidate_choices(state), value=state.selected_voiceprint_candidate_id or None),
+        gr.update(value=build_voiceprint_selection_label(state), visible=bool(episode and episode.subtitle_segments)),
+        gr.update(
+            choices=build_voiceprint_candidate_choices(state),
+            value=state.selected_voiceprint_candidate_id or None,
+            visible=bool(state.voiceprint_candidates),
+        ),
         gr.update(choices=build_voiceprint_character_choices(state), value=state.selected_voiceprint_character_name or None),
         gr.update(value=build_voiceprint_summary(state)),
         gr.update(value=state.rerun_candidate_label or "選択した時刻を再読み込みすると候補がここに表示されます。"),
@@ -664,6 +673,7 @@ def generate_subtitles(file_path: str | None, start_time: str, end_time: str, en
         diarization_result = run_diarization_pipeline(
             preprocessing_result=preprocessing_result,
             transcription_result=transcription_result,
+            episode_id=episode.episode_id,
             data_dir=DATA_DIR,
             progress_callback=lambda value, message: progress(value, desc=message),
         )
@@ -695,8 +705,9 @@ def generate_subtitles(file_path: str | None, start_time: str, end_time: str, en
         diarization_segments=assignment_result.diarization_segments,
         text_postprocessor=lambda text: apply_dictionary(text, work_dictionary),
     )
-    state.voiceprint_candidates = []
-    state.selected_voiceprint_candidate_id = ""
+    normalize_voiceprint_candidate_state(state)
+    if state.voiceprint_candidates and not state.selected_voiceprint_candidate_id:
+        state.selected_voiceprint_candidate_id = state.voiceprint_candidates[0].candidate_id
     progress(1.0, desc="字幕を作成しました")
     if assignment_result.fallback_used and transcription_result.failed_segments and preprocessing_result.fallback_used:
         return render_all(state, "字幕を作成しました（一部の区間はフォールバックや失敗を含みます）", "info")
@@ -939,17 +950,14 @@ def select_subtitle_segment_by_id(segment_id: str | None, state_dict: dict):
 
     state.selected_subtitle_segment_id = segment.id
     speaker_name = segment.display_name
-    if segment.voiceprint_profile_id:
-        speaker_name = f"{'MEDIUM' if segment.voiceprint_confidence < 0.75 else ''}".strip()
-        speaker_name = f"{speaker_name + ' | ' if speaker_name else ''}{segment.display_name}"
-    else:
-        speaker_name = f"UNKNOWN | {segment.display_name}"
+    if segment.voiceprint_profile_id and segment.voiceprint_confidence < 0.75:
+        speaker_name = f"MEDIUM | {segment.display_name}"
     return (
         segment.id,
         gr.update(
             value=build_selected_subtitle_label(
-                f"[{format_episode_seconds(episode, segment.source_start or segment.start)}]",
-                f"{max(0.0, segment.end - segment.start):.2f}s",
+                f"[{format_episode_seconds(episode, get_display_segment_start(segment))}]",
+                f"{get_display_segment_duration(segment):.2f}s",
                 speaker_name,
                 segment.edited_text[:60],
             )
@@ -969,20 +977,18 @@ def generate_voiceprint_candidates(state_dict: dict):
     if not episode.subtitle_segments:
         return render_all(state, "先に字幕を作成してください", "error")
 
-    state.voiceprint_candidates = build_voiceprint_candidates_for_episode(state)
-    state.selected_voiceprint_candidate_id = (
-        state.voiceprint_candidates[0].candidate_id if state.voiceprint_candidates else ""
-    )
+    normalize_voiceprint_candidate_state(state)
+    state.selected_voiceprint_candidate_id = state.voiceprint_candidates[0].candidate_id if state.voiceprint_candidates else ""
     if state.voiceprint_candidates:
         selected = state.voiceprint_candidates[0]
         state.selected_subtitle_segment_id = selected.source_segment_id
         state.selected_speaker_id = selected.speaker_id
         return render_all(
             state,
-            f"声紋サンプル候補を {len(state.voiceprint_candidates)}件 作成しました",
+            f"高品質な声紋候補を {len(state.voiceprint_candidates)}件 表示しました",
             "success",
         )
-    return render_all(state, "声紋サンプル候補を作れませんでした", "error")
+    return render_all(state, "この話では高品質な声紋候補を作れませんでした", "error")
 
 
 def select_voiceprint_candidate(candidate_id: str | None, state_dict: dict):
@@ -1005,11 +1011,17 @@ def register_voiceprint(candidate_id: str | None, character_name: str | None, st
 
     if work is None or episode is None:
         return render_all(state, "話数を選択してください", "error")
-    target_segment_id = (state.selected_subtitle_segment_id or "").strip()
-    if not target_segment_id:
-        return render_all(state, "先にセリフをクリックして選択してください", "error")
     if not target_name:
         return render_all(state, "登録先のキャラ名を選択してください", "error")
+    normalize_voiceprint_candidate_state(state)
+    chosen_candidate_id = (candidate_id or state.selected_voiceprint_candidate_id).strip()
+    selected_candidate = next(
+        (item for item in state.voiceprint_candidates if item.candidate_id == chosen_candidate_id),
+        None,
+    )
+    if selected_candidate is None:
+        return render_all(state, "声紋候補を選択してください", "error")
+    target_segment_id = selected_candidate.source_segment_id
 
     segment = next((item for item in episode.subtitle_segments if item.id == target_segment_id), None)
     if segment is None:
@@ -1018,13 +1030,19 @@ def register_voiceprint(candidate_id: str | None, character_name: str | None, st
     state.selected_subtitle_segment_id = segment.id
     state.selected_speaker_id = segment.speaker_id
     state.selected_voiceprint_character_name = target_name
+    state.selected_voiceprint_candidate_id = selected_candidate.candidate_id
 
     if target_name not in work.character_names:
         work.character_names.append(target_name)
         work.character_names.sort()
         sync_work_dictionary(DATA_DIR, work.work_id, work.title, work.character_names)
 
-    source_wav_path, clip_start, clip_end = get_segment_source_range(episode, segment)
+    if episode.wav_path and Path(episode.wav_path).exists():
+        source_wav_path = episode.wav_path
+        clip_start = selected_candidate.clip_start
+        clip_end = selected_candidate.clip_end
+    else:
+        source_wav_path, clip_start, clip_end = get_segment_source_range(episode, segment)
     if not source_wav_path:
         return render_all(state, "声紋登録に使う音声パスが見つかりません", "error")
 
@@ -1039,7 +1057,7 @@ def register_voiceprint(candidate_id: str | None, character_name: str | None, st
             source_wav_path=source_wav_path,
             clip_start=clip_start,
             clip_end=clip_end,
-            transcript_text=segment.edited_text,
+            transcript_text=selected_candidate.transcript_text,
             embedding=embedding,
         )
         profiles, samples, profile = upsert_voiceprint_profile(
@@ -1161,7 +1179,7 @@ def preview_partial_rerun(segment_id: str | None, state_dict: dict, progress=gr.
         return render_all(state, "再読み込み候補を取得できませんでした", "error")
 
     state.selected_subtitle_segment_id = segment.id
-    state.selected_subtitle_preview = f"[{format_episode_seconds(episode, segment.start)}] {segment.edited_text[:40]}"
+    state.selected_subtitle_preview = f"[{format_episode_seconds(episode, get_display_segment_start(segment))}] {segment.edited_text[:40]}"
     state.rerun_candidate_label = "再読み込み候補を取得しました。反映するか確認してください。"
     state.rerun_candidate_range = f"{range_start} - {range_end}"
     state.rerun_candidate_text = candidate_text

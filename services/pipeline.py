@@ -7,6 +7,7 @@ from typing import Callable
 from models.state import (
     DiarizationSegment,
     PreprocessingResult,
+    SubtitleSegment,
     SpeakerAssignmentResult,
     TranscriptionResult,
     VadSegment,
@@ -22,7 +23,9 @@ from .audio_segmentation import (
 )
 from .diarization import DiarizationError, diarize_wav_full
 from .speaker_assignment import assign_dominant_speaker_to_segments
+from .timestamp_refinement import refine_segment_timestamps
 from .transcription import TranscriptionError, transcribe_segments
+from .voiceprint import build_voiceprint_candidates_from_clean_segments_only
 
 
 ProgressCallback = Callable[[float, str], None]
@@ -34,6 +37,7 @@ RUNNING_ASR_MESSAGE = "\u5b57\u5e55\u3092\u4f5c\u6210\u3057\u3066\u3044\u307e\u3
 ASR_SAVE_ERROR = "\u5b57\u5e55\u306e\u4f5c\u6210\u306b\u5931\u6557\u3057\u307e\u3057\u305f"
 RUNNING_DIARIZATION_MESSAGE = "\u8a71\u8005\u3092\u5206\u5272\u3057\u3066\u3044\u307e\u3059..."
 DIARIZATION_SAVE_ERROR = "\u8a71\u8005\u306e\u5206\u5272\u306b\u5931\u6557\u3057\u307e\u3057\u305f"
+TIMING_SAVE_ERROR = "\u5b57\u5e55\u6642\u523b\u306e\u88dc\u6b63\u306b\u5931\u6557\u3057\u307e\u3057\u305f"
 
 
 def run_preprocessing_pipeline(
@@ -119,6 +123,7 @@ def run_transcription_pipeline(
 def run_diarization_pipeline(
     preprocessing_result: PreprocessingResult,
     transcription_result: TranscriptionResult,
+    episode_id: str,
     data_dir: str | Path,
     progress_callback: ProgressCallback | None = None,
 ) -> SpeakerAssignmentResult:
@@ -149,6 +154,37 @@ def run_diarization_pipeline(
         "diarization_segments": str(diarization_debug_path),
         "final_segments": str(final_debug_path),
     }
+    assignment_result.assigned_subtitle_segments = refine_segment_timestamps(
+        assignment_result.assigned_subtitle_segments,
+        preprocessing_result.vad_segments,
+        diarization_segments,
+    )
+    assignment_result.voiceprint_candidates = build_voiceprint_candidates_from_clean_segments_only(
+        episode_id=episode_id,
+        subtitle_segments=[
+            SubtitleSegment(
+                id=segment.id,
+                start=segment.start,
+                end=segment.end,
+                speaker_id=segment.speaker_id,
+                raw_label=segment.raw_label,
+                display_name=segment.display_name,
+                original_text=segment.original_text,
+                edited_text=segment.edited_text,
+                source_start=segment.source_start,
+                source_end=segment.source_end,
+                raw_start=segment.raw_start,
+                raw_end=segment.raw_end,
+                refined_start=segment.refined_start,
+                refined_end=segment.refined_end,
+            )
+            for segment in assignment_result.assigned_subtitle_segments
+        ],
+    )
+    refined_debug_path = debug_dir / "debug_refined_segments.json"
+    voiceprint_candidates_debug_path = debug_dir / "debug_voiceprint_candidates.json"
+    assignment_result.debug_paths["refined_segments"] = str(refined_debug_path)
+    assignment_result.debug_paths["voiceprint_candidates"] = str(voiceprint_candidates_debug_path)
     _write_diarization_debug_output(
         preprocessing_result.normalized_wav_path,
         diarization_segments,
@@ -157,6 +193,8 @@ def run_diarization_pipeline(
         assignment_result.error_message,
         diarization_debug_path,
     )
+    _write_refined_segments_debug_output(assignment_result, refined_debug_path)
+    _write_voiceprint_candidates_debug_output(assignment_result.voiceprint_candidates, voiceprint_candidates_debug_path)
     _write_final_segments_debug_output(assignment_result, final_debug_path)
     return assignment_result
 
@@ -234,6 +272,10 @@ def _write_final_segments_debug_output(
             {
                 "start": segment.start,
                 "end": segment.end,
+                "raw_start": segment.raw_start,
+                "raw_end": segment.raw_end,
+                "refined_start": segment.refined_start,
+                "refined_end": segment.refined_end,
                 "speaker_id": segment.speaker_id,
                 "raw_label": segment.raw_label,
                 "display_name": segment.display_name,
@@ -252,6 +294,41 @@ def _write_final_segments_debug_output(
         raise DiarizationError(DIARIZATION_SAVE_ERROR) from exc
 
 
+def _write_refined_segments_debug_output(
+    result: SpeakerAssignmentResult,
+    output_path: Path,
+) -> None:
+    payload = {
+        "segments": [
+            {
+                "id": segment.id,
+                "text": segment.edited_text,
+                "speaker_id": segment.speaker_id,
+                "raw_start": segment.raw_start,
+                "raw_end": segment.raw_end,
+                "refined_start": segment.refined_start,
+                "refined_end": segment.refined_end,
+            }
+            for segment in result.assigned_subtitle_segments
+        ]
+    }
+    try:
+        output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as exc:
+        raise DiarizationError(TIMING_SAVE_ERROR) from exc
+
+
+def _write_voiceprint_candidates_debug_output(
+    candidates,
+    output_path: Path,
+) -> None:
+    payload = {
+        "accepted_candidates": [candidate.to_dict() for candidate in candidates],
+    }
+    try:
+        output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as exc:
+        raise DiarizationError(TIMING_SAVE_ERROR) from exc
 def _notify(progress_callback: ProgressCallback | None, value: float, message: str) -> None:
     if progress_callback is not None:
         progress_callback(value, message)
