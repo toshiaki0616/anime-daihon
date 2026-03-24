@@ -124,6 +124,26 @@ class RawTranscriptSegment:
 
 
 @dataclass
+class DiarizationSegment:
+    start: float
+    end: float
+    raw_speaker_id: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "DiarizationSegment":
+        return cls(
+            start=float(data.get("start", 0.0) or 0.0),
+            end=float(data.get("end", 0.0) or 0.0),
+            raw_speaker_id=str(
+                data.get("raw_speaker_id", data.get("speaker", ""))
+            ).strip(),
+        )
+
+
+@dataclass
 class TranscriptionResult:
     source_path: str
     wav_path: str
@@ -165,6 +185,57 @@ class TranscriptionResult:
                 dict(item)
                 for item in data.get("failed_segments", [])
             ],
+        )
+
+
+@dataclass
+class SpeakerAssignmentResult:
+    diarization_segments: list[DiarizationSegment] = field(default_factory=list)
+    assigned_subtitle_segments: list[RawTranscriptSegment] = field(default_factory=list)
+    ui_speaker_map: dict[str, str] = field(default_factory=dict)
+    speaker_profiles: list["SpeakerProfile"] = field(default_factory=list)
+    debug_paths: dict[str, str] = field(default_factory=dict)
+    fallback_used: bool = False
+    error_message: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "diarization_segments": [segment.to_dict() for segment in self.diarization_segments],
+            "assigned_subtitle_segments": [
+                segment.to_dict() for segment in self.assigned_subtitle_segments
+            ],
+            "ui_speaker_map": dict(self.ui_speaker_map),
+            "speaker_profiles": [profile.to_dict() for profile in self.speaker_profiles],
+            "debug_paths": dict(self.debug_paths),
+            "fallback_used": self.fallback_used,
+            "error_message": self.error_message,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SpeakerAssignmentResult":
+        return cls(
+            diarization_segments=[
+                DiarizationSegment.from_dict(segment)
+                for segment in data.get("diarization_segments", [])
+            ],
+            assigned_subtitle_segments=[
+                RawTranscriptSegment.from_dict(segment)
+                for segment in data.get("assigned_subtitle_segments", [])
+            ],
+            ui_speaker_map={
+                str(key): str(value)
+                for key, value in dict(data.get("ui_speaker_map", {})).items()
+            },
+            speaker_profiles=[
+                SpeakerProfile.from_dict(profile)
+                for profile in data.get("speaker_profiles", [])
+            ],
+            debug_paths={
+                str(key): str(value)
+                for key, value in dict(data.get("debug_paths", {})).items()
+            },
+            fallback_used=bool(data.get("fallback_used", False)),
+            error_message=str(data.get("error_message", "")).strip(),
         )
 
 
@@ -382,6 +453,12 @@ class AppState:
     last_transcription_status: str = ""
     last_transcription_error: str = ""
     last_debug_asr_output_path: str = ""
+    last_diarization_segments: list[DiarizationSegment] = field(default_factory=list)
+    last_ui_speaker_map: dict[str, str] = field(default_factory=dict)
+    last_diarization_status: str = ""
+    last_diarization_error: str = ""
+    last_debug_diarization_output_path: str = ""
+    last_debug_final_output_path: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -416,6 +493,14 @@ class AppState:
             "last_transcription_status": self.last_transcription_status,
             "last_transcription_error": self.last_transcription_error,
             "last_debug_asr_output_path": self.last_debug_asr_output_path,
+            "last_diarization_segments": [
+                segment.to_dict() for segment in self.last_diarization_segments
+            ],
+            "last_ui_speaker_map": dict(self.last_ui_speaker_map),
+            "last_diarization_status": self.last_diarization_status,
+            "last_diarization_error": self.last_diarization_error,
+            "last_debug_diarization_output_path": self.last_debug_diarization_output_path,
+            "last_debug_final_output_path": self.last_debug_final_output_path,
         }
 
     @classmethod
@@ -457,4 +542,16 @@ class AppState:
             last_transcription_status=data.get("last_transcription_status", ""),
             last_transcription_error=data.get("last_transcription_error", ""),
             last_debug_asr_output_path=data.get("last_debug_asr_output_path", ""),
+            last_diarization_segments=[
+                DiarizationSegment.from_dict(segment)
+                for segment in data.get("last_diarization_segments", [])
+            ],
+            last_ui_speaker_map={
+                str(key): str(value)
+                for key, value in dict(data.get("last_ui_speaker_map", {})).items()
+            },
+            last_diarization_status=data.get("last_diarization_status", ""),
+            last_diarization_error=data.get("last_diarization_error", ""),
+            last_debug_diarization_output_path=data.get("last_debug_diarization_output_path", ""),
+            last_debug_final_output_path=data.get("last_debug_final_output_path", ""),
         )

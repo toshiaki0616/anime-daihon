@@ -1,8 +1,10 @@
 from .state import (
     AppState,
+    DiarizationSegment,
     Episode,
     PreprocessingResult,
     RawTranscriptSegment,
+    SpeakerAssignmentResult,
     SpeakerProfile,
     SubtitleSegment,
     TranscriptionResult,
@@ -12,9 +14,11 @@ from .state import (
 
 __all__ = [
     "AppState",
+    "DiarizationSegment",
     "Episode",
     "PreprocessingResult",
     "RawTranscriptSegment",
+    "SpeakerAssignmentResult",
     "SpeakerProfile",
     "SubtitleSegment",
     "TranscriptionResult",

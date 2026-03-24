@@ -9,7 +9,9 @@ from models.state import (
     AppState,
     Episode,
     PreprocessingResult,
+    RawTranscriptSegment,
     SpeakerProfile,
+    SpeakerAssignmentResult,
     SubtitleSegment,
     TranscriptionResult,
     Work,
@@ -174,6 +176,10 @@ def _segment_midpoint(start: float, end: float) -> float:
     return start + ((end - start) / 2.0)
 
 
+def _raw_speaker_value(item: DiarizationSegment) -> str:
+    return getattr(item, "raw_speaker_id", getattr(item, "speaker", ""))
+
+
 def _nearest_speaker_for_segment(item: TranscriptionSegment, diarization_segments: list[DiarizationSegment]) -> str | None:
     if not diarization_segments:
         return None
@@ -185,7 +191,7 @@ def _nearest_speaker_for_segment(item: TranscriptionSegment, diarization_segment
             distance = 0.0
         else:
             distance = min(abs(midpoint - diarization.start), abs(midpoint - diarization.end))
-        candidate = (distance, diarization.start, diarization.speaker)
+        candidate = (distance, diarization.start, _raw_speaker_value(diarization))
         if nearest is None or candidate < nearest:
             nearest = candidate
 
@@ -208,9 +214,10 @@ def _assign_speaker_mapping(
             overlap = _overlap_duration(item.start, item.end, diarization.start, diarization.end)
             if overlap <= 0:
                 continue
-            overlap_by_speaker[diarization.speaker] = overlap_by_speaker.get(diarization.speaker, 0.0) + overlap
-            earliest_overlap[diarization.speaker] = min(
-                earliest_overlap.get(diarization.speaker, float("inf")),
+            raw_speaker = _raw_speaker_value(diarization)
+            overlap_by_speaker[raw_speaker] = overlap_by_speaker.get(raw_speaker, 0.0) + overlap
+            earliest_overlap[raw_speaker] = min(
+                earliest_overlap.get(raw_speaker, float("inf")),
                 max(item.start, diarization.start),
             )
 
@@ -318,7 +325,8 @@ def _build_speaker_diagnostics(
     else:
         durations: dict[str, float] = {}
         for item in diarization_segments:
-            durations[item.speaker] = durations.get(item.speaker, 0.0) + max(0.0, item.end - item.start)
+            raw_speaker = _raw_speaker_value(item)
+            durations[raw_speaker] = durations.get(raw_speaker, 0.0) + max(0.0, item.end - item.start)
         ordered = sorted(durations.items(), key=lambda pair: (-pair[1], pair[0]))
         lines.append(f"話者候補: {len(ordered)}人")
         lines.extend([f"- {speaker}: {duration:.1f}秒" for speaker, duration in ordered[:5]])
@@ -397,6 +405,28 @@ def record_transcription_error(state: AppState, error_message: str) -> AppState:
     next_state.last_transcription_status = "error"
     next_state.last_transcription_error = error_message
     next_state.last_debug_asr_output_path = ""
+    return next_state
+
+
+def record_diarization_result(state: AppState, result: SpeakerAssignmentResult) -> AppState:
+    next_state = deepcopy(state)
+    next_state.last_diarization_segments = deepcopy(result.diarization_segments)
+    next_state.last_ui_speaker_map = dict(result.ui_speaker_map)
+    next_state.last_diarization_status = "fallback" if result.fallback_used else "success"
+    next_state.last_diarization_error = result.error_message
+    next_state.last_debug_diarization_output_path = result.debug_paths.get("diarization_segments", "")
+    next_state.last_debug_final_output_path = result.debug_paths.get("final_segments", "")
+    return next_state
+
+
+def record_diarization_error(state: AppState, error_message: str) -> AppState:
+    next_state = deepcopy(state)
+    next_state.last_diarization_segments = []
+    next_state.last_ui_speaker_map = {}
+    next_state.last_diarization_status = "error"
+    next_state.last_diarization_error = error_message
+    next_state.last_debug_diarization_output_path = ""
+    next_state.last_debug_final_output_path = ""
     return next_state
 
 
@@ -659,6 +689,89 @@ def apply_subtitle_edits(state: AppState, rows: list[list[str]]) -> AppState:
         if manual_speaker_id:
             segment.speaker_id = manual_speaker_id
         segment.edited_text = str(row[4])
+    sync_episode(episode)
+    _touch_work_for_episode(next_state, episode)
+    return next_state
+
+
+def apply_assigned_transcript_segments(
+    state: AppState,
+    file_path: str,
+    wav_path: str,
+    range_start: str,
+    range_end: str,
+    enhance_audio: bool,
+    transcript_segments: list[RawTranscriptSegment],
+    speaker_label_map: dict[str, str],
+    diarization_segments: list[DiarizationSegment] | None = None,
+    text_postprocessor: Callable[[str], str] | None = None,
+    speaker_diagnostics: str = "",
+) -> AppState:
+    next_state = deepcopy(state)
+    episode = get_selected_episode(next_state)
+    if episode is None:
+        return next_state
+
+    previous_segments = deepcopy(episode.subtitle_segments)
+    subtitle_segments: list[SubtitleSegment] = []
+    for index, item in enumerate(transcript_segments):
+        text = item.original_text.strip()
+        if not text:
+            continue
+        edited_text = text_postprocessor(text) if text_postprocessor else item.edited_text or text
+        subtitle_segments.append(
+            SubtitleSegment(
+                id=item.id or f"seg_{len(subtitle_segments) + 1:03d}",
+                start=item.start,
+                end=item.end,
+                source_start=item.source_start or item.start,
+                source_end=item.source_end or item.end,
+                speaker_id=item.speaker_id or FALLBACK_SPEAKER_ID,
+                raw_label=item.raw_label or FALLBACK_LABEL,
+                display_name=item.display_name or item.raw_label or FALLBACK_LABEL,
+                original_text=text,
+                edited_text=_preserve_edited_text(
+                    previous_segments,
+                    index,
+                    text,
+                    item.start,
+                    item.end,
+                    edited_text,
+                ),
+            )
+        )
+
+    episode.file_path = file_path
+    episode.wav_path = wav_path
+    episode.range_start = range_start
+    episode.range_end = range_end
+    episode.enhance_audio = enhance_audio
+    episode.subtitle_segments = subtitle_segments
+    episode.speaker_label_map = (
+        {
+            raw_speaker: normalized_speaker
+            for raw_speaker, normalized_speaker in speaker_label_map.items()
+            if raw_speaker != "__fallback__"
+        }
+        if subtitle_segments
+        else {}
+    )
+    episode.speaker_diagnostics = speaker_diagnostics or _build_speaker_diagnostics(
+        [
+            TranscriptionSegment(
+                start=item.start,
+                end=item.end,
+                text=item.original_text,
+                source_start=item.source_start,
+                source_end=item.source_end,
+            )
+            for item in transcript_segments
+        ],
+        diarization_segments or [],
+        subtitle_segments,
+    )
+    episode.merge_map = {}
+    episode.status = "作業中" if subtitle_segments else episode.status
     sync_episode(episode)
     _touch_work_for_episode(next_state, episode)
     return next_state

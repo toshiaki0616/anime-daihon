@@ -7,8 +7,8 @@ from pathlib import Path
 from core.state_ops import (
     MAX_SPEAKER_SLOTS,
     add_speaker_profile,
+    apply_assigned_transcript_segments,
     apply_subtitle_edits,
-    apply_transcription_segments,
     apply_voiceprint_assignments_to_episode,
     build_mock_app_state,
     create_episode,
@@ -20,6 +20,8 @@ from core.state_ops import (
     move_segment_to_speaker,
     record_preprocessing_error,
     record_preprocessing_result,
+    record_diarization_error,
+    record_diarization_result,
     record_transcription_error,
     record_transcription_result,
     rename_speaker,
@@ -41,7 +43,6 @@ from services import (
     assign_voiceprints_to_segments,
     build_voiceprint_sample,
     build_prompt_dictionary,
-    diarize_wav,
     ensure_dictionary_storage,
     ensure_voiceprint_storage,
     extract_audio_clip,
@@ -53,6 +54,7 @@ from services import (
     load_work_dictionary,
     merge_dictionaries,
     preprocess_media,
+    run_diarization_pipeline,
     run_preprocessing_pipeline,
     run_transcription_pipeline,
     save_library_state,
@@ -641,6 +643,7 @@ def generate_subtitles(file_path: str | None, start_time: str, end_time: str, en
         work_dictionary = sync_work_dictionary(DATA_DIR, work.work_id, work.title, work.character_names)
         work_dictionary = merge_dictionaries(work_dictionary, build_prompt_dictionary(initial_prompt))
 
+    diarization_result = None
     try:
         preprocessing_result = run_preprocessing_pipeline(
             input_path=file_path,
@@ -658,39 +661,47 @@ def generate_subtitles(file_path: str | None, start_time: str, end_time: str, en
             progress_callback=lambda value, message: progress(value, desc=message),
         )
         state = record_transcription_result(state, transcription_result)
+        diarization_result = run_diarization_pipeline(
+            preprocessing_result=preprocessing_result,
+            transcription_result=transcription_result,
+            data_dir=DATA_DIR,
+            progress_callback=lambda value, message: progress(value, desc=message),
+        )
+        state = record_diarization_result(state, diarization_result)
     except AudioSegmentationError as exc:
         state = record_preprocessing_error(state, str(file_path or ""), exc.user_message)
         return render_all(state, exc.user_message, "error")
     except TranscriptionError as exc:
         state = record_transcription_error(state, exc.user_message)
         return render_all(state, exc.user_message, "error")
+    except DiarizationError as exc:
+        state = record_diarization_error(state, exc.user_message)
+        return render_all(state, exc.user_message, "error")
 
-    state = apply_transcription_segments(
+    assignment_result = diarization_result
+    if assignment_result is None:
+        state = record_diarization_error(state, "話者の分割に失敗しました")
+        return render_all(state, "話者の分割に失敗しました", "error")
+
+    state = apply_assigned_transcript_segments(
         state=state,
         file_path=preprocessing_result.source_path,
         wav_path=preprocessing_result.normalized_wav_path,
         range_start=start_time.strip(),
         range_end=end_time.strip(),
         enhance_audio=enhance_audio,
-        transcription_segments=[
-            TranscriptionSegment(
-                start=item.start,
-                end=item.end,
-                text=item.original_text,
-                source_start=item.source_start,
-                source_end=item.source_end,
-            )
-            for item in transcription_result.raw_transcript_segments
-        ],
-        diarization_segments=[],
+        transcript_segments=assignment_result.assigned_subtitle_segments,
+        speaker_label_map=assignment_result.ui_speaker_map,
+        diarization_segments=assignment_result.diarization_segments,
         text_postprocessor=lambda text: apply_dictionary(text, work_dictionary),
-        voiceprint_assignments=[],
     )
     state.voiceprint_candidates = []
     state.selected_voiceprint_candidate_id = ""
     progress(1.0, desc="字幕を作成しました")
-    if transcription_result.failed_segments and preprocessing_result.fallback_used:
+    if assignment_result.fallback_used and transcription_result.failed_segments and preprocessing_result.fallback_used:
         return render_all(state, "字幕を作成しました（一部の区間はフォールバックや失敗を含みます）", "info")
+    if assignment_result.fallback_used:
+        return render_all(state, "話者の分割に失敗しました", "error")
     if transcription_result.failed_segments:
         return render_all(state, "字幕を作成しました（一部の区間は失敗しました）", "info")
     if preprocessing_result.fallback_used:

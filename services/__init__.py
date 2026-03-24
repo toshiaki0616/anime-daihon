@@ -17,7 +17,14 @@ from .dictionary import (
     save_work_dictionary,
     sync_work_dictionary,
 )
-from .diarization import DiarizationError, DiarizationSegment, diarize_wav
+from .diarization import (
+    DiarizationError,
+    DiarizationSegment,
+    build_speaker_profiles_from_segments,
+    diarize_wav,
+    diarize_wav_full,
+    normalize_raw_speaker_labels,
+)
 from .persistence import (
     PersistenceError,
     ensure_voiceprint_storage,
@@ -28,8 +35,17 @@ from .persistence import (
     save_library_state,
     save_voiceprint_state,
 )
-from .pipeline import run_preprocessing_pipeline, run_transcription_pipeline
+from .pipeline import (
+    run_diarization_pipeline,
+    run_preprocessing_pipeline,
+    run_transcription_pipeline,
+)
 from .preprocess import MediaPreprocessError, PreprocessResult, extract_audio_clip, preprocess_media
+from .speaker_assignment import (
+    assign_dominant_speaker_to_segments,
+    compute_overlap_score,
+    map_raw_speakers_to_ui_labels,
+)
 from .speaker_id import (
     SpeakerIdentificationError,
     VoiceprintAssignment,
@@ -72,11 +88,15 @@ __all__ = [
     "WorkDictionary",
     "apply_dictionary",
     "build_prompt_dictionary",
+    "build_speaker_profiles_from_segments",
     "assign_voiceprints_to_segments",
+    "assign_dominant_speaker_to_segments",
     "average_embedding",
     "build_voiceprint_sample",
+    "compute_overlap_score",
     "cosine_similarity",
     "diarize_wav",
+    "diarize_wav_full",
     "ensure_dictionary_storage",
     "ensure_voiceprint_storage",
     "extract_audio_clip",
@@ -90,8 +110,11 @@ __all__ = [
     "normalize_model_selection",
     "merge_dictionaries",
     "merge_short_vad_segments",
+    "map_raw_speakers_to_ui_labels",
     "normalize_audio",
+    "normalize_raw_speaker_labels",
     "preprocess_media",
+    "run_diarization_pipeline",
     "run_preprocessing_pipeline",
     "run_transcription_pipeline",
     "save_library_state",

@@ -4,7 +4,13 @@ import json
 from pathlib import Path
 from typing import Callable
 
-from models.state import PreprocessingResult, TranscriptionResult, VadSegment
+from models.state import (
+    DiarizationSegment,
+    PreprocessingResult,
+    SpeakerAssignmentResult,
+    TranscriptionResult,
+    VadSegment,
+)
 
 from .audio_segmentation import (
     AudioSegmentationError,
@@ -14,6 +20,8 @@ from .audio_segmentation import (
     segment_speech_with_vad,
     split_long_vad_segments,
 )
+from .diarization import DiarizationError, diarize_wav_full
+from .speaker_assignment import assign_dominant_speaker_to_segments
 from .transcription import TranscriptionError, transcribe_segments
 
 
@@ -24,6 +32,8 @@ PREPROCESS_DONE_MESSAGE = "\u524d\u51e6\u7406\u304c\u5b8c\u4e86\u3057\u307e\u305
 PREPROCESS_SAVE_ERROR = "\u524d\u51e6\u7406\u7d50\u679c\u306e\u4fdd\u5b58\u306b\u5931\u6557\u3057\u307e\u3057\u305f"
 RUNNING_ASR_MESSAGE = "\u5b57\u5e55\u3092\u4f5c\u6210\u3057\u3066\u3044\u307e\u3059..."
 ASR_SAVE_ERROR = "\u5b57\u5e55\u306e\u4f5c\u6210\u306b\u5931\u6557\u3057\u307e\u3057\u305f"
+RUNNING_DIARIZATION_MESSAGE = "\u8a71\u8005\u3092\u5206\u5272\u3057\u3066\u3044\u307e\u3059..."
+DIARIZATION_SAVE_ERROR = "\u8a71\u8005\u306e\u5206\u5272\u306b\u5931\u6557\u3057\u307e\u3057\u305f"
 
 
 def run_preprocessing_pipeline(
@@ -106,6 +116,51 @@ def run_transcription_pipeline(
     return result
 
 
+def run_diarization_pipeline(
+    preprocessing_result: PreprocessingResult,
+    transcription_result: TranscriptionResult,
+    data_dir: str | Path,
+    progress_callback: ProgressCallback | None = None,
+) -> SpeakerAssignmentResult:
+    debug_dir = Path(data_dir) / "debug"
+    debug_dir.mkdir(parents=True, exist_ok=True)
+
+    diarization_segments: list[DiarizationSegment] = []
+    fallback_used = False
+    error_message = ""
+    _notify(progress_callback, 0.72, RUNNING_DIARIZATION_MESSAGE)
+    try:
+        diarization_segments = diarize_wav_full(preprocessing_result.normalized_wav_path)
+    except DiarizationError as exc:
+        fallback_used = True
+        error_message = exc.user_message
+        diarization_segments = []
+
+    assignment_result = assign_dominant_speaker_to_segments(
+        transcript_segments=transcription_result.raw_transcript_segments,
+        diarization_segments=diarization_segments,
+    )
+    assignment_result.fallback_used = fallback_used
+    assignment_result.error_message = error_message
+
+    diarization_debug_path = debug_dir / "debug_diarization_segments.json"
+    final_debug_path = debug_dir / "debug_final_segments.json"
+    assignment_result.debug_paths = {
+        "diarization_segments": str(diarization_debug_path),
+        "final_segments": str(final_debug_path),
+    }
+    _write_diarization_debug_output(
+        preprocessing_result.normalized_wav_path,
+        diarization_segments,
+        assignment_result.ui_speaker_map,
+        assignment_result.fallback_used,
+        assignment_result.error_message,
+        diarization_debug_path,
+    )
+    _write_final_segments_debug_output(assignment_result, final_debug_path)
+    return assignment_result
+
+
 def _build_full_range_fallback(wav_path: str) -> list[VadSegment]:
     duration = max(0.0, get_audio_duration_seconds(wav_path))
     return [VadSegment(start=0.0, end=duration)]
@@ -147,6 +202,54 @@ def _write_asr_debug_output(result: TranscriptionResult, output_path: Path) -> N
         output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     except OSError as exc:
         raise TranscriptionError(ASR_SAVE_ERROR) from exc
+
+
+def _write_diarization_debug_output(
+    wav_path: str,
+    diarization_segments: list[DiarizationSegment],
+    ui_speaker_map: dict[str, str],
+    fallback_used: bool,
+    error_message: str,
+    output_path: Path,
+) -> None:
+    payload = {
+        "wav_path": wav_path,
+        "raw_diarization_output": [segment.to_dict() for segment in diarization_segments],
+        "normalized_speaker_mapping": dict(ui_speaker_map),
+        "fallback_used": fallback_used,
+        "error_message": error_message,
+    }
+    try:
+        output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as exc:
+        raise DiarizationError(DIARIZATION_SAVE_ERROR) from exc
+
+
+def _write_final_segments_debug_output(
+    result: SpeakerAssignmentResult,
+    output_path: Path,
+) -> None:
+    payload = {
+        "final_subtitle_rows": [
+            {
+                "start": segment.start,
+                "end": segment.end,
+                "speaker_id": segment.speaker_id,
+                "raw_label": segment.raw_label,
+                "display_name": segment.display_name,
+                "original_text": segment.original_text,
+                "edited_text": segment.edited_text,
+            }
+            for segment in result.assigned_subtitle_segments
+        ],
+        "ui_speaker_map": dict(result.ui_speaker_map),
+        "fallback_used": result.fallback_used,
+        "error_message": result.error_message,
+    }
+    try:
+        output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as exc:
+        raise DiarizationError(DIARIZATION_SAVE_ERROR) from exc
 
 
 def _notify(progress_callback: ProgressCallback | None, value: float, message: str) -> None:
