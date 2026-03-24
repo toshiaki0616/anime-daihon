@@ -1,3 +1,11 @@
+from .audio_segmentation import (
+    AudioSegmentationError,
+    get_audio_duration_seconds,
+    merge_short_vad_segments,
+    normalize_audio,
+    segment_speech_with_vad,
+    split_long_vad_segments,
+)
 from .dictionary import (
     build_prompt_dictionary,
     DictionaryEntry,
@@ -20,6 +28,7 @@ from .persistence import (
     save_library_state,
     save_voiceprint_state,
 )
+from .pipeline import run_preprocessing_pipeline
 from .preprocess import MediaPreprocessError, PreprocessResult, extract_audio_clip, preprocess_media
 from .speaker_id import (
     SpeakerIdentificationError,
@@ -44,6 +53,7 @@ from .transcription import (
 )
 
 __all__ = [
+    "AudioSegmentationError",
     "DictionaryEntry",
     "DiarizationError",
     "DiarizationSegment",
@@ -68,6 +78,7 @@ __all__ = [
     "ensure_dictionary_storage",
     "ensure_voiceprint_storage",
     "extract_audio_clip",
+    "get_audio_duration_seconds",
     "export_episode_csv",
     "export_episode_txt",
     "extract_voice_embedding",
@@ -76,12 +87,17 @@ __all__ = [
     "load_work_dictionary",
     "normalize_model_selection",
     "merge_dictionaries",
+    "merge_short_vad_segments",
+    "normalize_audio",
     "preprocess_media",
+    "run_preprocessing_pipeline",
     "save_library_state",
     "save_voiceprint_state",
     "save_work_dictionary",
     "score_voiceprint_profiles",
     "select_best_voiceprint_match",
+    "segment_speech_with_vad",
+    "split_long_vad_segments",
     "sync_work_dictionary",
     "transcribe_wav",
     "upsert_voiceprint_profile",

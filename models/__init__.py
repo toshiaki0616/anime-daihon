@@ -1,3 +1,19 @@
-﻿from .state import AppState, Episode, SpeakerProfile, SubtitleSegment, Work
+from .state import (
+    AppState,
+    Episode,
+    PreprocessingResult,
+    SpeakerProfile,
+    SubtitleSegment,
+    VadSegment,
+    Work,
+)
 
-__all__ = ["AppState", "Episode", "SpeakerProfile", "SubtitleSegment", "Work"]
+__all__ = [
+    "AppState",
+    "Episode",
+    "PreprocessingResult",
+    "SpeakerProfile",
+    "SubtitleSegment",
+    "VadSegment",
+    "Work",
+]

@@ -5,7 +5,7 @@ from datetime import datetime
 from string import ascii_uppercase
 from typing import Callable, Iterable
 
-from models.state import AppState, Episode, SpeakerProfile, SubtitleSegment, Work
+from models.state import AppState, Episode, PreprocessingResult, SpeakerProfile, SubtitleSegment, Work
 from services.diarization import DiarizationSegment
 from services.speaker_id import VoiceprintAssignment
 from services.transcription import TranscriptionSegment
@@ -342,6 +342,34 @@ def _touch_work_for_episode(state: AppState, episode: Episode) -> None:
     work = get_selected_work(state)
     if work is not None:
         work.updated_at = episode.updated_at
+
+
+def record_preprocessing_result(state: AppState, result: PreprocessingResult) -> AppState:
+    next_state = deepcopy(state)
+    next_state.last_preprocessing_source_path = result.source_path
+    next_state.last_preprocessing_wav_path = result.normalized_wav_path
+    next_state.last_processed_range_start = result.processed_range_start
+    next_state.last_processed_range_end = result.processed_range_end
+    next_state.last_vad_segments = deepcopy(result.vad_segments)
+    next_state.last_preprocessing_status = "fallback" if result.fallback_used else "success"
+    next_state.last_preprocessing_error = ""
+    next_state.last_debug_output_path = result.debug_paths.get("vad_segments", "")
+    next_state.last_vad_fallback_used = result.fallback_used
+    return next_state
+
+
+def record_preprocessing_error(state: AppState, source_path: str, error_message: str) -> AppState:
+    next_state = deepcopy(state)
+    next_state.last_preprocessing_source_path = source_path
+    next_state.last_preprocessing_wav_path = ""
+    next_state.last_processed_range_start = 0.0
+    next_state.last_processed_range_end = 0.0
+    next_state.last_vad_segments = []
+    next_state.last_preprocessing_status = "error"
+    next_state.last_preprocessing_error = error_message
+    next_state.last_debug_output_path = ""
+    next_state.last_vad_fallback_used = False
+    return next_state
 
 
 def sync_episode(episode: Episode) -> Episode:

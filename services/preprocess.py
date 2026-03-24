@@ -6,8 +6,12 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from .audio_segmentation import AudioSegmentationError, normalize_audio
 
-SUPPORTED_EXTENSIONS = {".mp4", ".wav", ".mp3"}
+
+CLIP_SOURCE_MISSING_ERROR = "\u97f3\u58f0\u30af\u30ea\u30c3\u30d7\u306e\u5143\u30d5\u30a1\u30a4\u30eb\u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093"
+CLIP_RANGE_ERROR = "\u97f3\u58f0\u30af\u30ea\u30c3\u30d7\u306e\u6642\u9593\u7bc4\u56f2\u304c\u4e0d\u6b63\u3067\u3059"
+CLIP_EXTRACT_ERROR = "\u97f3\u58f0\u30af\u30ea\u30c3\u30d7\u306e\u62bd\u51fa\u306b\u5931\u6557\u3057\u307e\u3057\u305f"
 
 
 class MediaPreprocessError(Exception):
@@ -30,23 +34,19 @@ def preprocess_media(
     range_end: str,
     data_dir: str | Path,
 ) -> PreprocessResult:
-    source = Path(file_path)
-    if not source.exists() or not source.is_file():
-        raise MediaPreprocessError("ファイルを読み込めませんでした")
-
-    extension = source.suffix.lower()
-    if extension not in SUPPORTED_EXTENSIONS:
-        raise MediaPreprocessError("ファイルを読み込めませんでした")
-
-    output_dir = Path(data_dir) / "processed"
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    base_wav_path = _ensure_wav(source, output_dir)
-    final_wav_path = _slice_range(base_wav_path, range_start, range_end, output_dir)
+    try:
+        result = normalize_audio(
+            input_path=file_path,
+            output_dir=Path(data_dir) / "processed",
+            range_start=range_start,
+            range_end=range_end,
+        )
+    except AudioSegmentationError as exc:
+        raise MediaPreprocessError(exc.user_message) from exc
 
     return PreprocessResult(
-        source_path=str(source),
-        wav_path=str(final_wav_path),
+        source_path=result.source_path,
+        wav_path=result.normalized_wav_path,
         range_start=range_start,
         range_end=range_end,
     )
@@ -60,13 +60,13 @@ def extract_audio_clip(
 ) -> str:
     source = Path(file_path)
     if not source.exists() or not source.is_file():
-        raise MediaPreprocessError("音声クリップの作成元ファイルが見つかりません")
+        raise MediaPreprocessError(CLIP_SOURCE_MISSING_ERROR)
     if clip_end <= clip_start:
-        raise MediaPreprocessError("音声クリップの範囲が不正です")
+        raise MediaPreprocessError(CLIP_RANGE_ERROR)
 
     ffmpeg_path = shutil.which("ffmpeg")
     if not ffmpeg_path:
-        raise MediaPreprocessError("音声クリップの作成に失敗しました")
+        raise MediaPreprocessError(CLIP_EXTRACT_ERROR)
 
     output_dir = Path(data_dir) / "clips"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -88,65 +88,8 @@ def extract_audio_clip(
         "s16",
         str(output_path),
     ]
-    _run_ffmpeg(command, "音声クリップの作成に失敗しました")
+    _run_ffmpeg(command, CLIP_EXTRACT_ERROR)
     return str(output_path)
-
-
-def _ensure_wav(source: Path, output_dir: Path) -> Path:
-    if source.suffix.lower() == ".wav":
-        return source
-
-    ffmpeg_path = shutil.which("ffmpeg")
-    if not ffmpeg_path:
-        raise MediaPreprocessError("音声の取り出しに失敗しました")
-
-    output_path = output_dir / f"{source.stem}_{uuid.uuid4().hex[:8]}.wav"
-    command = [
-        ffmpeg_path,
-        "-y",
-        "-i",
-        str(source),
-        "-vn",
-        "-ac",
-        "1",
-        "-ar",
-        "16000",
-        "-sample_fmt",
-        "s16",
-        str(output_path),
-    ]
-    _run_ffmpeg(command, "音声の取り出しに失敗しました")
-    return output_path
-
-
-def _slice_range(source_wav: Path, range_start: str, range_end: str, output_dir: Path) -> Path:
-    if not range_start and not range_end:
-        return source_wav
-
-    ffmpeg_path = shutil.which("ffmpeg")
-    if not ffmpeg_path:
-        raise MediaPreprocessError("音声の取り出しに失敗しました")
-
-    output_path = output_dir / f"{source_wav.stem}_slice_{uuid.uuid4().hex[:8]}.wav"
-    command = [ffmpeg_path, "-y"]
-    if range_start:
-        command.extend(["-ss", range_start])
-    command.extend(["-i", str(source_wav)])
-    if range_end:
-        command.extend(["-to", range_end])
-    command.extend(
-        [
-            "-ac",
-            "1",
-            "-ar",
-            "16000",
-            "-sample_fmt",
-            "s16",
-            str(output_path),
-        ]
-    )
-    _run_ffmpeg(command, "音声の取り出しに失敗しました")
-    return output_path
 
 
 def _run_ffmpeg(command: list[str], user_message: str) -> None:

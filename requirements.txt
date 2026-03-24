@@ -5,3 +5,4 @@ numpy>=1.24.0
 beautifulsoup4>=4.12.0
 requests>=2.31.0
 pykakasi>=2.2.1
+silero-vad>=5.1.2

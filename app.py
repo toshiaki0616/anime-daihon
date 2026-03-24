@@ -18,6 +18,8 @@ from core.state_ops import (
     get_selected_work,
     merge_speakers,
     move_segment_to_speaker,
+    record_preprocessing_error,
+    record_preprocessing_result,
     rename_speaker,
     swap_speakers,
     sync_episode,
@@ -27,6 +29,7 @@ from core.state_ops import (
 )
 from models.state import AppState, VoiceprintCandidate
 from services import (
+    AudioSegmentationError,
     DictionaryEntry,
     DiarizationError,
     MediaPreprocessError,
@@ -48,6 +51,7 @@ from services import (
     load_work_dictionary,
     merge_dictionaries,
     preprocess_media,
+    run_preprocessing_pipeline,
     save_library_state,
     save_voiceprint_state,
     save_work_dictionary,
@@ -620,9 +624,8 @@ def generate_subtitles(file_path: str | None, start_time: str, end_time: str, en
     if episode is None:
         return render_all(state, "話数を選択してください", "error")
     if not file_path:
+        state = record_preprocessing_error(state, "", "ファイルを選んでください")
         return render_all(state, "ファイルを選んでください", "error")
-
-    progress(0.05, desc="音声を取り出しています...")
 
     episode.range_start = start_time.strip()
     episode.range_end = end_time.strip()
@@ -641,19 +644,22 @@ def generate_subtitles(file_path: str | None, start_time: str, end_time: str, en
             voiceprint_profiles = []
 
     try:
-        preprocess_result = preprocess_media(
-            file_path=file_path,
+        preprocessing_result = run_preprocessing_pipeline(
+            input_path=file_path,
             range_start=start_time.strip(),
             range_end=end_time.strip(),
             data_dir=DATA_DIR,
+            progress_callback=lambda value, message: progress(value, desc=message),
         )
+        state = record_preprocessing_result(state, preprocessing_result)
         progress(0.4, desc="音声を文字にしています...")
         transcription_segments = transcribe_wav(
-            preprocess_result.wav_path,
+            preprocessing_result.normalized_wav_path,
             model_name=episode.whisper_model,
             initial_prompt=prompt_text,
         )
-    except MediaPreprocessError as exc:
+    except AudioSegmentationError as exc:
+        state = record_preprocessing_error(state, str(file_path or ""), exc.user_message)
         return render_all(state, exc.user_message, "error")
     except TranscriptionError as exc:
         return render_all(state, exc.user_message, "error")
@@ -664,7 +670,7 @@ def generate_subtitles(file_path: str | None, start_time: str, end_time: str, en
     if voiceprint_profiles:
         try:
             voiceprint_assignments = assign_voiceprints_to_segments(
-                preprocess_result.wav_path,
+                preprocessing_result.normalized_wav_path,
                 transcription_segments,
                 voiceprint_profiles,
             )
@@ -672,16 +678,16 @@ def generate_subtitles(file_path: str | None, start_time: str, end_time: str, en
             voiceprint_assignments = []
     progress(0.72, desc="話者ごとに分けています...")
     try:
-        diarization_segments = diarize_wav(preprocess_result.wav_path)
+        diarization_segments = diarize_wav(preprocessing_result.normalized_wav_path)
     except DiarizationError:
         diarization_failed = True
 
     state = apply_transcription_segments(
         state=state,
-        file_path=preprocess_result.source_path,
-        wav_path=preprocess_result.wav_path,
-        range_start=preprocess_result.range_start,
-        range_end=preprocess_result.range_end,
+        file_path=preprocessing_result.source_path,
+        wav_path=preprocessing_result.normalized_wav_path,
+        range_start=start_time.strip(),
+        range_end=end_time.strip(),
         enhance_audio=enhance_audio,
         transcription_segments=transcription_segments,
         diarization_segments=diarization_segments,
@@ -691,6 +697,10 @@ def generate_subtitles(file_path: str | None, start_time: str, end_time: str, en
     state.voiceprint_candidates = []
     state.selected_voiceprint_candidate_id = ""
     progress(1.0, desc="字幕を作成しました")
+    if preprocessing_result.fallback_used and diarization_failed:
+        return render_all(state, "字幕を作成しましたが、発話区間と話者分割はフォールバックを含みます", "info")
+    if preprocessing_result.fallback_used:
+        return render_all(state, "字幕を作成しました（発話区間はフォールバック）", "info")
     if diarization_failed:
         return render_all(state, "話者の分割に失敗しました", "error")
     return render_all(state, "字幕を作成しました", "success")

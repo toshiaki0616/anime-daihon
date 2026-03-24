@@ -35,6 +35,62 @@ class SubtitleSegment:
 
 
 @dataclass
+class VadSegment:
+    start: float
+    end: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "VadSegment":
+        return cls(
+            start=float(data.get("start", 0.0) or 0.0),
+            end=float(data.get("end", 0.0) or 0.0),
+        )
+
+
+@dataclass
+class PreprocessingResult:
+    source_path: str
+    normalized_wav_path: str
+    processed_range_start: float
+    processed_range_end: float
+    vad_segments: list[VadSegment] = field(default_factory=list)
+    debug_paths: dict[str, str] = field(default_factory=dict)
+    fallback_used: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "source_path": self.source_path,
+            "normalized_wav_path": self.normalized_wav_path,
+            "processed_range_start": self.processed_range_start,
+            "processed_range_end": self.processed_range_end,
+            "vad_segments": [segment.to_dict() for segment in self.vad_segments],
+            "debug_paths": dict(self.debug_paths),
+            "fallback_used": self.fallback_used,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "PreprocessingResult":
+        return cls(
+            source_path=str(data.get("source_path", "")).strip(),
+            normalized_wav_path=str(data.get("normalized_wav_path", "")).strip(),
+            processed_range_start=float(data.get("processed_range_start", 0.0) or 0.0),
+            processed_range_end=float(data.get("processed_range_end", 0.0) or 0.0),
+            vad_segments=[
+                VadSegment.from_dict(segment)
+                for segment in data.get("vad_segments", [])
+            ],
+            debug_paths={
+                str(key): str(value)
+                for key, value in dict(data.get("debug_paths", {})).items()
+            },
+            fallback_used=bool(data.get("fallback_used", False)),
+        )
+
+
+@dataclass
 class SpeakerProfile:
     speaker_id: str
     raw_label: str
@@ -235,6 +291,15 @@ class AppState:
     voiceprint_candidates: list[VoiceprintCandidate] = field(default_factory=list)
     selected_voiceprint_candidate_id: str = ""
     selected_voiceprint_character_name: str = ""
+    last_preprocessing_source_path: str = ""
+    last_preprocessing_wav_path: str = ""
+    last_processed_range_start: float = 0.0
+    last_processed_range_end: float = 0.0
+    last_vad_segments: list[VadSegment] = field(default_factory=list)
+    last_preprocessing_status: str = ""
+    last_preprocessing_error: str = ""
+    last_debug_output_path: str = ""
+    last_vad_fallback_used: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -254,6 +319,15 @@ class AppState:
             ],
             "selected_voiceprint_candidate_id": self.selected_voiceprint_candidate_id,
             "selected_voiceprint_character_name": self.selected_voiceprint_character_name,
+            "last_preprocessing_source_path": self.last_preprocessing_source_path,
+            "last_preprocessing_wav_path": self.last_preprocessing_wav_path,
+            "last_processed_range_start": self.last_processed_range_start,
+            "last_processed_range_end": self.last_processed_range_end,
+            "last_vad_segments": [segment.to_dict() for segment in self.last_vad_segments],
+            "last_preprocessing_status": self.last_preprocessing_status,
+            "last_preprocessing_error": self.last_preprocessing_error,
+            "last_debug_output_path": self.last_debug_output_path,
+            "last_vad_fallback_used": self.last_vad_fallback_used,
         }
 
     @classmethod
@@ -276,4 +350,16 @@ class AppState:
             ],
             selected_voiceprint_candidate_id=data.get("selected_voiceprint_candidate_id", ""),
             selected_voiceprint_character_name=data.get("selected_voiceprint_character_name", ""),
+            last_preprocessing_source_path=data.get("last_preprocessing_source_path", ""),
+            last_preprocessing_wav_path=data.get("last_preprocessing_wav_path", ""),
+            last_processed_range_start=float(data.get("last_processed_range_start", 0.0) or 0.0),
+            last_processed_range_end=float(data.get("last_processed_range_end", 0.0) or 0.0),
+            last_vad_segments=[
+                VadSegment.from_dict(segment)
+                for segment in data.get("last_vad_segments", [])
+            ],
+            last_preprocessing_status=data.get("last_preprocessing_status", ""),
+            last_preprocessing_error=data.get("last_preprocessing_error", ""),
+            last_debug_output_path=data.get("last_debug_output_path", ""),
+            last_vad_fallback_used=bool(data.get("last_vad_fallback_used", False)),
         )
